@@ -99,11 +99,18 @@ chk('gear.js 导出时令变量', gear.includes("SEASON_VAR = 'tcm_xueli_season'
 
 // ---------- 3. 宿主半接线 ----------
 const host = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8');
-for (const m of ['hasDosage', "ctx.on('llm/stream'", 'GEAR_GUARD', 'GEAR_GUARD_VAR', 'defineVar(KB_PATH_VAR', 'defineVar(SEASON_VAR', 'seasonText', 'ctx.effect', 'ensureCorpus', 'createSessionRecorder', 'autoFileBooks', 'registerClinicTools'])
-  chk(`lib/index.js 含「${m}」`, host.includes(m));
+// 两块功能各自成文件：学习版在 lib/xuexi.js，模拟问诊在 lib/sim.js，index.js 只做组装。
+const xuexiSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'xuexi.js'), 'utf8');
+const simSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8');
+const xuexiMarkers = ['hasDosage', 'GEAR_GUARD', 'GEAR_GUARD_VAR', 'defineVar(KB_PATH_VAR', 'defineVar(SEASON_VAR', 'seasonText', 'ctx.effect', 'ensureCorpus', 'createSessionRecorder', 'autoFileBooks'];
+for (const m of xuexiMarkers) chk(`lib/xuexi.js 含「${m}」`, xuexiSrc.includes(m));
+for (const m of ['ctx.effect', 'registerClinicTools', 'createSimThinker', 'mountDashangRoute']) chk(`lib/sim.js 含「${m}」`, simSrc.includes(m));
+chk('出口只挂一次：由组装器把两块的出口串起来', host.includes("ctx.on('llm/stream'") && xuexiSrc.includes('const stream = async function* (options, next, hint)') && simSrc.includes('const stream = async function* (options, next, hint)'));
+chk('lib/index.js 只做组装：不再管剂量与病例卡', !host.includes('hasDosage') && !host.includes('registerClinicTools') && host.includes('applyXuexi') && host.includes('applySim'));
+chk('两块功能互不引用：改一块不会碰坏另一块', !xuexiSrc.includes("'./sim.js'") && !simSrc.includes("'./xuexi.js'"));
 chk('lib/index.js 的 inject 以 systemPrompt 打头', /export const inject = \['systemPrompt'/.test(host));
-chk('lib/index.js 同一目录只挂一份监视', host.includes('WATCHERS') && host.includes('shared.holders'));
-chk('lib/index.js 不再有挡位开关', !host.includes('currentLevel') && !host.includes("'level'"));
+chk('同一目录只挂一份监视', xuexiSrc.includes('WATCHERS') && xuexiSrc.includes('shared.holders'));
+chk('不再有挡位开关', !xuexiSrc.includes('currentLevel') && !xuexiSrc.includes("'level'"));
 
 // ---------- 4. 出口校验 ----------
 const guard = fs.readFileSync(path.join(PLUGIN, 'lib', 'dosage-guard.js'), 'utf8');
@@ -171,8 +178,8 @@ chk('只有医生打「交卷」才切点评，且第一句就交卷也认', (()
 chk('点评打完把档位交回去（judging + settleBack）', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('const judging = new Map()') && think.includes('const settleBack = (sessionId, previous)') && think.includes("includes('xueli_finish_round')"); })());
 chk('医案入库前先遮克数（题面/方名/一句话原因）', (() => { const clinic = fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8'); return clinic.includes('caseSummary: blotDosage(textOf(args.case_summary))') && clinic.includes('failLine: blotDosage(textOf(args.fail_line))') && clinic.includes('prescribe: blotDosage(textOf(args.prescribe))'); })());
 chk('调档只管模拟问诊这一局，普通聊天不碰', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8');
-chk('抽过的锚点跨重启记得住（写进资料库医案目录）', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); return rec.includes('export function readSeenAnchors') && rec.includes('export function appendSeenAnchor') && idx.includes('loadSeen: () => readSeenAnchors(currentPath(config))') && idx.includes('saveSeen:'); })());
-chk('最近几局也落一份，重启后翻得到', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); return rec.includes('export function readRecentRounds') && rec.includes('export function saveRecentRound') && idx.includes('loadRounds: () => readRecentRounds(currentPath(config))'); })()); return think.includes('if (!simSessions.has(sessionId)) return') && think.includes('simSessions.delete(sessionId)'); })());
+chk('抽过的锚点跨重启记得住（写进资料库医案目录）', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return rec.includes('export function readSeenAnchors') && rec.includes('export function appendSeenAnchor') && idx.includes('loadSeen: () => readSeenAnchors(currentPath(config))') && idx.includes('saveSeen:'); })());
+chk('最近几局也落一份，重启后翻得到', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return rec.includes('export function readRecentRounds') && rec.includes('export function saveRecentRound') && idx.includes('loadRounds: () => readRecentRounds(currentPath(config))'); })()); return think.includes('if (!simSessions.has(sessionId)) return') && think.includes('simSessions.delete(sessionId)'); })());
 chk('预设说明写明仅供学习研究', String(cfg.description).includes('仅供学习研究'));
 const rawPrefix = ((cfg.plugins || []).find((x) => x.id === 'persona') || {}).config?.prefix || '';
 chk('persona 提示词以常驻口径变量开头', rawPrefix.trimStart().startsWith('{{tcm_gear_guard}}'));
@@ -225,7 +232,7 @@ chk('六经与时令必须排在最前', prefix.includes('21.5 问诊齐了之�
 
 // ---------- 6.5 打赏码与六部脉计数 ----------
 const dashangSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'dashang.js'), 'utf8');
-const indexSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8');
+const indexSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8');
 chk('打赏区由插件代码追加', dashangSrc.includes('export function dashangBlock') && indexSrc.includes('dashangGiftText') && indexSrc.includes("chunk.type === 'finish'"));
 chk('打赏只在模拟问诊满十局时摆：点评末尾、由病例卡计数认领', dashangSrc.includes('export function dashangBlock(webServer, rounds)') && indexSrc.includes('dashangGiftText(giftRounds, ctx)') && indexSrc.includes('clinicStore.takeGift(sessionId)') && indexSrc.includes('giftOf: () => gifted.due') && fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8').includes('GIFT_EVERY = 10') && fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8').includes('export function saveRoundProgress'));
 chk('打赏网址带实时端口', dashangSrc.includes('listenedPort') && dashangSrc.includes('config?.port') && !/127\.0\.0\.1:\d{4,5}\/dsh-tcm-xueli/.test(dashangSrc));
@@ -238,12 +245,12 @@ chk('打赏通道接进宿主', indexSrc.includes('mountDashangRoute'));
 chk('六部脉合起来只算一项', prefix.includes('「脉象」就是这十项里的一项') && prefix.includes('不拆成六项去报数'));
 chk('六部怎么问都不许超过八问', prefix.includes('一轮六题，不会超过八问'));
 chk('两版工具不许串（学习版侧）', fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8').includes("versionOf(ctx, context?.agent) !== 'full'"));
-chk('全量版会话里学习版规则不生效', fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8').includes("versionOf(ctx, options?.sessionId) === 'full'"));
+chk('全量版会话里学习版规则不生效', fs.readFileSync(path.join(PLUGIN, 'lib', 'xuexi.js'), 'utf8').includes("versionOf(ctx, options?.sessionId) === 'full'"));
 chk('识版导出 versionOf', fs.readFileSync(path.join(PLUGIN, 'lib', 'preset-scope.js'), 'utf8').includes('export function versionOf'));
 chk('资料库根目录由代码锁定', fs.existsSync(path.join(PLUGIN, 'lib', 'kb-root.js')) && fs.readFileSync(path.join(PLUGIN, 'lib', 'kb-index.js'), 'utf8').includes('childOf(root, INDEX_FILE)') && fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8').includes('insideRoot(kb, dir)'));
-chk('每条回话收尾压回最低档：settled 真接上了', (() => { const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); return index.includes('const { thinker, child, settled, giftDue, quietOf, release } = createSimThinker') && index.includes('settled(session, event)'); })());
+chk('每条回话收尾压回最低档：settled 真接上了', (() => { const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return index.includes('const { thinker, child, settled, giftDue, quietOf, release } = createSimThinker') && index.includes('settled(session, event)'); })());
 chk('调档先认会话归属，空 id 也拒', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('owner !== sessionId && agent.id !== sessionId') && think.includes('不调档'); })());
-chk('开局关掉思考、交卷开到 High', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); return think.includes("'【模拟问诊 · 开局】'") && think.includes("['off', 'minimal', 'low']") && think.includes('createSimThinker') && think.includes("HAND_IN_LEVEL = 'high'") && think.includes('raiseHigh(ctx, known, previous)') && index.includes('createSimThinker(ctx, {') && index.includes('versionOf,'); })());
+chk('开局关掉思考、交卷开到 High', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return think.includes("'【模拟问诊 · 开局】'") && think.includes("['off', 'minimal', 'low']") && think.includes('createSimThinker') && think.includes("HAND_IN_LEVEL = 'high'") && think.includes('raiseHigh(ctx, known, previous)') && index.includes('createSimThinker(ctx, {') && index.includes('versionOf,'); })());
 chk('不许拿处方写法当扣分理由', prefix.includes('不许出现「能照着抓的方子」「这一格不合规矩」「剂量不对」这类话当扣分理由') && prefix.includes('服后怎么将息（盖被取汗、喝热粥这类）'));
 chk('点评不拿剂量扣分，君臣佐使不靠克数', prefix.includes('不扣分、不当硬错、不许因此写「不过关」') && prefix.includes('量最大不等于君') && prefix.includes('谁说的就记到谁名下'));
 chk('四步点评只在模拟问诊里用', prefix.includes('下面这套四步点评只在模拟问诊里用') && prefix.includes('普通问诊、拿方来点评、自己问病这些回合一概不套它'));
@@ -256,12 +263,12 @@ chk('裁判不要求医生引经典原文', prefix.includes('不要求医生引�
 chk('点评不许写出可照抓的处方笺', prefix.includes('不写先煎、后下、包煎、另煎') && prefix.includes('不写几剂几服') && prefix.includes('破了自己判不合格'));
 chk('这一局的病人子会话也关思考', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('panelSessions.has(parent)') && think.includes('subagent'); })());
 chk('思考开关只管面板会话：没有局号的开局不碰档位', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('export function panelOpen') && think.includes('if (panelOpen(said))') && think.includes('panelSessions.add(sessionId)'); })());
-chk('面板弃局当场还档位：release 接上、面板会通知', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); const client = fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8'); return think.includes('mountSimEndRoute') && index.includes('simEnd.release = release') && client.includes('sim-end?session='); })());
-chk('重启后照存根还档位', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const records = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); return records.includes('readGearState') && records.includes('saveGearEntry') && records.includes('dropGearEntry') && think.includes('pendingRestore') && index.includes('gearLoad:'); })());
-chk('闭嘴跟着实例走：热重载不背旧包袱', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'index.js'), 'utf8'); return !think.includes('export function simQuiet') && index.includes('muted.of(options?.sessionId)'); })());
+chk('面板弃局当场还档位：release 接上、面板会通知', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); const client = fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8'); return think.includes('mountSimEndRoute') && index.includes('simEnd.release = release') && client.includes('sim-end?session='); })());
+chk('重启后照存根还档位', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const records = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return records.includes('readGearState') && records.includes('saveGearEntry') && records.includes('dropGearEntry') && think.includes('pendingRestore') && index.includes('gearLoad:'); })());
+chk('闭嘴跟着实例走：热重载不背旧包袱', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const index = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return !think.includes('export function simQuiet') && index.includes('muted.of(options?.sessionId)'); })());
 chk('不再按文件夹名字认库', !fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8').includes('KB_DIR_NAME'));
 chk('各处提醒使用新的设置项名称', prefix.includes('设置 → 中医 · 经方（学习版）｜资料库目录') && !prefix.includes('中医 · 经方｜'));
-chk('首次使用提醒写清「第一次用」与「点保存」', indexSrc.includes('这是第一次用') && indexSrc.includes('再点保存'));
+chk('首次使用提醒写清「第一次用」与「点保存」', fs.readFileSync(path.join(PLUGIN, 'lib', 'xuexi.js'), 'utf8').includes('这是第一次用') && fs.readFileSync(path.join(PLUGIN, 'lib', 'xuexi.js'), 'utf8').includes('再点保存'));
 chk('设置页保留首次使用的黄条提示', fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8').includes('第一次用还没有设定资料库'));
 chk('六部脉正常选项固定出现', prefix.includes('「数（跳得快）」「缓（跳得慢）」「不急不慢」') && prefix.includes('「浮（一按就摸到）」「沉（按到筋骨才摸到）」「中（不浮不沉）」'));
 chk('六部脉默认分两轮问快慢与深浅', prefix.includes('第一轮六部一部一问') && prefix.includes('第二轮再一部一问'));
@@ -312,7 +319,7 @@ try {
 note(`node_modules/${MOD} 指向当前插件目录`, sameTarget, INSTALLED);
 
 // ---------- 8. 副本一致性 ----------
-const files = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/gear.js', 'lib/dosage-guard.js', 'lib/preset.js', 'lib/client.js', 'lib/kb-index.js', 'lib/platform.js', 'lib/corpus.js', 'lib/records.js', 'lib/book-text.js', 'lib/book-classify.js', 'lib/auto-file.js', 'lib/clinic.js', 'lib/search.js', 'lib/preset-scope.js', 'lib/season.js', 'lib/dashang.js', 'lib/kb-root.js', 'lib/sim-think.js', 'lib/build-index.mjs'];
+const files = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/xuexi.js', 'lib/sim.js', 'lib/gear.js', 'lib/dosage-guard.js', 'lib/preset.js', 'lib/client.js', 'lib/kb-index.js', 'lib/platform.js', 'lib/corpus.js', 'lib/records.js', 'lib/book-text.js', 'lib/book-classify.js', 'lib/auto-file.js', 'lib/clinic.js', 'lib/search.js', 'lib/preset-scope.js', 'lib/season.js', 'lib/dashang.js', 'lib/kb-root.js', 'lib/sim-think.js', 'lib/build-index.mjs'];
 // 从 npm/git 装的副本会被 git 换成 CRLF，源目录是 LF；比内容不比行尾
 const md5 = (p) => createHash('md5').update(fs.readFileSync(p, 'utf8').replaceAll(String.fromCharCode(13) + String.fromCharCode(10), String.fromCharCode(10))).digest('hex');
 let diff = 0;

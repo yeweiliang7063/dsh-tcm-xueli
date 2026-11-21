@@ -11,6 +11,8 @@ const files = info.files.map((f) => f.path)
 const need = [
   'cordis.patch.yml',
   'lib/index.js',
+  'lib/xuexi.js',
+  'lib/sim.js',
   'lib/gear.js',
   'install.mjs',
   'verify-preset.mjs',

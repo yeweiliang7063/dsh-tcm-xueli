@@ -15,22 +15,14 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hasDosage, blotDosage, quoteSafeCut } from '../lib/dosage-guard.js'
 
-const INDEX = join(import.meta.dirname, '..', 'lib', 'index.js')
+const XUEXI = join(import.meta.dirname, '..', 'lib', 'xuexi.js')
+const SIM = join(import.meta.dirname, '..', 'lib', 'sim.js')
 
-function streamBlock(src) {
-  const start = src.indexOf("ctx.on('llm/stream'")
-  const end = src.indexOf('出口校验注册失败', start)
-  assert.ok(start > 0 && end > start, '源码里找不到 llm/stream 出口校验段')
-  return src.slice(start, end)
-}
-
-/** 从源码里抠出 llm/stream 的回调体，做成一个可调用的异步生成器。 */
-function makeStream(src, overrides = {}) {
-  const start = src.indexOf("ctx.on('llm/stream'")
-  const head = src.indexOf('async function* inspect(options, next) {', start)
-  assert.ok(head > 0, '找不到 inspect 生成器')
+/** 从源码里抠出一个出口包装器的函数体，做成可调用的异步生成器。 */
+function grabBody(src, marker) {
+  const head = src.indexOf(marker)
+  assert.ok(head > 0, '找不到出口包装器：' + marker)
   const bodyStart = src.indexOf('{', head) + 1
-
   let depth = 1
   let i = bodyStart
   while (i < src.length && depth > 0) {
@@ -39,7 +31,12 @@ function makeStream(src, overrides = {}) {
     else if (c === '}') depth -= 1
     i += 1
   }
-  const body = src.slice(bodyStart, i - 1)
+  return src.slice(bodyStart, i - 1)
+}
+
+/** 学习版那一段：剂量遮挡与开场提醒。 */
+function makeStream(src, overrides = {}) {
+  const body = grabBody(src, 'const stream = async function* (options, next, hint) {')
 
   // 真实代码里 verdict() 调的是模块作用域的 tcmVerdict，不是从 deps 拿的。
   // 默认换成「确定是中医会话」，其余一行不动，这样剂量分支才会被执行到；
@@ -63,8 +60,7 @@ function makeStream(src, overrides = {}) {
       const currentPath = deps.currentPath || (() => 'D:/中医知识库')
       const looksTcmSession = deps.looksTcmSession || (() => true)
       const looksTcmPrompt = deps.looksTcmPrompt || (() => false)
-      // 闭嘴现在跟着开关实例走：出口问的是 muted.of，测试照旧经 deps.simQuiet 注入。
-      const muted = { of: deps.simQuiet || (() => false) }
+      const versionOf = deps.versionOf || (() => '')
       ${patched}
     })
   `
@@ -80,7 +76,36 @@ function makeStream(src, overrides = {}) {
     currentPath: overrides.currentPath,
     looksTcmSession: overrides.looksTcmSession,
     looksTcmPrompt: overrides.looksTcmPrompt,
+    versionOf: overrides.versionOf,
+  }
+  return (chunks) => {
+    async function* source() {
+      for (const c of chunks) yield c
+    }
+    return factory({ sessionId: 's1', ...(overrides.options || {}) }, source, deps)
+  }
+}
+
+/** 模拟问诊那一段：闭麦与点评末尾补打赏。 */
+function makeSimStream(overrides = {}) {
+  const body = grabBody(readFileSync(SIM, 'utf8'), 'const stream = async function* (options, next, hint) {')
+  const harness = `
+    return (async function* (options, next, deps) {
+      const { ctx, dashangGiftText } = deps
+      const hint = deps
+      const muted = { of: deps.simQuiet || (() => false) }
+      const gifted = { due: deps.due || null }
+      const clinicGiftOf = deps.clinicGiftOf || null
+      ${body}
+    })
+  `
+  const factory = new Function(harness)()
+  const deps = {
+    ctx: { logger: { warn() {} }, on() {} },
+    dashangGiftText: overrides.dashangGiftText || (() => ''),
     simQuiet: overrides.simQuiet,
+    due: overrides.due,
+    clinicGiftOf: overrides.clinicGiftOf,
   }
   return (chunks) => {
     async function* source() {
@@ -130,14 +155,16 @@ const END = [
   { type: 'finish', reason: 'stop' },
 ]
 
-test('流块类型：llm/stream 里不许 yield 裸字符串字面量', () => {
-  const block = streamBlock(readFileSync(INDEX, 'utf8'))
-  const bare = [...block.matchAll(/yield\s+('[^']*'|"[^"]*"|`[^`]*`)/g)].map((m) => m[1])
-  assert.deepEqual(bare, [], 'llm/stream 里不许 yield 裸字符串：' + bare.join(', '))
+test('流块类型：出口包装器里不许 yield 裸字符串字面量', () => {
+  for (const file of [XUEXI, SIM]) {
+    const body = grabBody(readFileSync(file, 'utf8'), 'const stream = async function* (options, next, hint) {')
+    const bare = [...body.matchAll(/yield\s+('[^']*'|"[^"]*"|`[^`]*`)/g)].map((m) => m[1])
+    assert.deepEqual(bare, [], file + ' 里不许 yield 裸字符串：' + bare.join(', '))
+  }
 })
 
 test('流块类型：普通长回答，每块合法、正文完整', async () => {
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('这是第一句。'),
     TEXT('这是第二句，还没写完'),
@@ -156,7 +183,7 @@ test('流块类型：普通长回答，每块合法、正文完整', async () =>
 test('流块类型：命中剂量只遮数值，药名和骨架保留', async () => {
   // 这条走的是「命中剂量 → blotDosage 遮数值 → 继续发」那条分支，
   // 早期版本正是在这条分支上把对象又包了一层，报 text-delta text must be a string。
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('这是辨证思路，正常一句。'),
     TEXT('桂枝 9g，芍药 9g。'),
@@ -183,7 +210,7 @@ test('流块类型：剂量跨段时也不许把对象又包一层', async () =>
   // 成因：take() 里「整段挖掉」那条分支 yield 的是已经包好的对象，
   // 外层又对它做了一次 delta(base, piece)，text 就成了对象。
   // 触发条件：上一段带着剂量语境（进了 tail），这一段本身没有剂量。
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('桂枝12克。'),
     TEXT('这是下一句。'),
@@ -203,7 +230,7 @@ test('流块类型：数字和单位被切在两块，也不许把剂量漏出�
   // 回归用例：3.1.7 体检时发现，「桂枝 9」先到、下一块才到「克」，
   // 前半段没有单位判不出剂量就原样发了，后半段只剩一个「克」遮不到，
   // 读者最后看到的是完整剂量。
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('桂枝 9\n'),
     TEXT('克。'),
@@ -221,7 +248,7 @@ test('流块类型：数字和单位被切在两块，也不许把剂量漏出�
 test('流块类型：列表里的整张方没加引号，逐块照遮', async () => {
   // 列表逐行到达：单个换行不切段，等空行到了才整段判，整方一行一味也照样遮。
   const formula = '1. **桂枝** 9g\n2. **白芍** 9g\n3. **生姜** 9g\n4. **甘草** 6g\n\n'
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('这是转述一张方子：\n\n'),
     TEXT(formula),
@@ -241,7 +268,7 @@ test('流块类型：列表里的整张方没加引号，逐块照遮', async ()
 test('流块类型：列表每行带句号的整方，没加引号也照遮', async () => {
   // 列表一行一句、逐行到达时，单行只有一味药；必须把整块攒到空行再判，
   // 否则每行都会被单独遮掉，整方转述照样被误伤。
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('1. **桂枝** 9g，解肌发表。\n'),
     TEXT('2. **白芍** 9g，敛阴和营。\n'),
@@ -262,7 +289,7 @@ test('流块类型：列表每行带句号的整方，没加引号也照遮', as
 })
 
 test('流块类型：正文一直没收尾，靠结束块收走也不出问题', async () => {
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('这句话没有句末标点'),
     ...END,
@@ -274,7 +301,7 @@ test('流块类型：正文一直没收尾，靠结束块收走也不出问题',
 
 test('会话开场提醒：没填资料库时先开一块提醒，正文整体挪到 1 号块', async () => {
   const notice = '⚠️ 还没设定资料库目录：这次回答不会引书讲方，只会给治法方向。'
-  const run = makeStream(readFileSync(INDEX, 'utf8'), {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
     kbNotice: () => notice,
     currentPath: () => '',
   })([START, TEXT('第一句。'), ...END])
@@ -291,7 +318,7 @@ test('会话开场提醒：没填资料库时先开一块提醒，正文整体�
 })
 
 test('会话开场提醒：填了资料库就不提醒，正文仍在 0 号块', async () => {
-  const run = makeStream(readFileSync(INDEX, 'utf8'), {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
     kbNotice: () => '',
     currentPath: () => 'D:/中医知识库',
   })([START, TEXT('第一句。'), ...END])
@@ -305,7 +332,7 @@ test('会话开场提醒：填了资料库就不提醒，正文仍在 0 号块',
 })
 
 test('不是中医会话：原样转发，一个字节都不动', async () => {
-  const run = makeStream(readFileSync(INDEX, 'utf8'), {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
     looksTcmSession: () => false,
     kbNotice: () => '⚠️ 不该出现的提醒',
   })([START, TEXT('桂枝三两。'), ...END])
@@ -325,7 +352,7 @@ test('点评别人的方：没加引号照遮，整段抄进「」才放过', as
     { role: 'assistant', content: '好的，我先看方。' },
   ]
   const run = (chunks) =>
-    makeStream(readFileSync(INDEX, 'utf8'), { options: { messages } })(chunks)
+    makeStream(readFileSync(XUEXI, 'utf8'), { options: { messages } })(chunks)
   const joinedOf = (out) => out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
 
   const quoted = await collect(
@@ -355,7 +382,7 @@ test('点评别人的方：没加引号照遮，整段抄进「」才放过', as
 
 test('会话认不出来但提示词带学理模式总纲：仍按中医会话遮数', async () => {
   const system = '【学理模式·总纲——本节优先于下文任何出方规则】……其余口径……'
-  const run = makeStream(readFileSync(INDEX, 'utf8'), {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
     looksTcmSession: () => false,
     looksTcmPrompt: (text) => typeof text === 'string' && text.includes('【学理模式·总纲'),
     options: { system },
@@ -369,7 +396,7 @@ test('宿主说不是中医会话，但这次提示词带学理模式总纲：�
   // 宿主没拿到会话对象、或者预设投影落空时，会给出「确定不是中医」的结论；
   // 只要这次请求的 system 里确实带着学理模式总纲，口径就还得在。
   const system = '【学理模式·总纲——本节优先于下文任何出方规则】……其余口径……'
-  const run = makeStream(readFileSync(INDEX, 'utf8'), {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
     verdict: { decided: true, tcm: false },
     looksTcmPrompt: (text) => typeof text === 'string' && text.includes('【学理模式·总纲'),
     options: { system },
@@ -380,7 +407,7 @@ test('宿主说不是中医会话，但这次提示词带学理模式总纲：�
 })
 
 test('会话认不出来、提示词也不是学理模式：一个字节都不动', async () => {
-  const run = makeStream(readFileSync(INDEX, 'utf8'), {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
     looksTcmSession: () => false,
     looksTcmPrompt: () => false,
     options: { system: '你是通用助手。' },
@@ -393,7 +420,7 @@ test('会话认不出来、提示词也不是学理模式：一个字节都不�
 test('流块类型：引文被句号、换行切开，跨块也不许误遮', async () => {
   // 引一整句原文时，句号往往先到；旧逻辑立刻在句号处切段，这一块只剩半个引文，
   // 被判成「没加引号」，引文里的克数就被误遮了。切点现在会前移到开引号处等闭合。
-  const run = makeStream(readFileSync(INDEX, 'utf8'))([
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
     TEXT('（原文：「桂枝9克，芍药6克。'),
     TEXT('共七剂。」）\n'),
@@ -411,7 +438,7 @@ test('流块类型：引文被句号、换行切开，跨块也不许误遮', as
 })
 
 test('被系统通知叫醒的一轮：文字清空，工具块照旧转发', async () => {
-  const run = makeStream(readFileSync(INDEX, 'utf8'), { simQuiet: () => true })([
+  const run = makeSimStream({ simQuiet: () => true })([
     START,
     TEXT('我是旁白，不该出现。'),
     { type: 'tool-call', index: 1, name: 'send_message', input: { text: '你好' } },
