@@ -180,9 +180,11 @@ test('抽过的锚点存进盘里：重启后同一锚点不会再抽到', () =>
   const one = first.drawAnchor('普通')
   assert.equal(saved.at(-1), one.anchor)
 
-  // 模拟重启：内存空了，但上次存的那条读回来
+  // 模拟重启：内存空了，但上次存的那条读回来。
+  // 只保证「八局窗口内」不重复——再往后（第 9 局起）允许重新抽到同一锚点，
+  // 所以这里只查满一窗：多抽几局就撞上属正常，抽到就跳红是测错了。
   const second = createStore({ loadSeen: () => [one.anchor] })
-  for (let i = 0; i < 40; i += 1) {
+  for (let i = 0; i < 8; i += 1) {
     assert.notEqual(second.drawAnchor('普通').anchor, one.anchor, '八局内不许抽到同一个锚点')
   }
 })
