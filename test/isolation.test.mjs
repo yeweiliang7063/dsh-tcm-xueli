@@ -102,6 +102,39 @@ test('隔离：串联之后剂量照遮、打赏块编号仍是连着的', async
   }
 })
 
+test('隔离：问诊闭麦的那一轮，资料库提醒也不许漏出来', async () => {
+  const { apply } = await import('../lib/index.js')
+  const ctx = fakeCtx()
+  // 问诊的闭麦登记走 ctx.effect(() => ctx.on('session/event', …))：
+  // 假宿主得真执行 effect 收到的函数，事件才挂得上；inject 空转，免得开本机通道干等十秒。
+  const events = []
+  const baseOn = ctx.on
+  ctx.on = (event, fn) => {
+    if (event === 'session/event') { events.push(fn); return () => {} }
+    return baseOn(event, fn)
+  }
+  ctx.effect = (fn) => { try { fn() } catch { /* 注册失败就跳过 */ } }
+  ctx.inject = () => {}
+  apply(ctx, { kbPath: '', autoIndex: false })
+  assert.ok(events.length > 0, '问诊的事件监听要挂上')
+  for (const fn of events) {
+    fn({ id: 's-mute' }, { type: 'user/message', data: { content: '【模拟问诊 · 开局】普通｜方药｜20261122-1' } })
+  }
+
+  const chunks = [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: '旁白不该出现。' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: '旁白不该出现。' } },
+    { type: 'finish', reason: 'stop' },
+  ]
+  const out = []
+  for await (const c of ctx.handlers[0]({ sessionId: 's-mute', system: TCM_SYSTEM }, async function* () { for (const c of chunks) yield c })) out.push(c)
+  const text = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  // 拆分时这道闸丢过：sim 写了「这轮闭麦」的标记，xuexi 收了没读，
+  // 没设资料库的用户每局第一轮（恰是闭麦轮）都漏出整段提醒。
+  assert.equal(text, '', '闭麦轮一个字都不许往外放，资料库提醒也算字')
+})
+
 test('隔离：出口包装器抛错时，不把异常抛给宿主', async () => {
   const { apply } = await import('../lib/index.js')
   const ctx = fakeCtx()

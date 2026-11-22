@@ -61,6 +61,8 @@ function makeStream(src, overrides = {}) {
       const looksTcmSession = deps.looksTcmSession || (() => true)
       const looksTcmPrompt = deps.looksTcmPrompt || (() => false)
       const versionOf = deps.versionOf || (() => '')
+      // 问诊那边递过来的闭麦标记：默认没有（普通聊天），要验闭麦轮用 overrides.hint。
+      const hint = deps.hint || {}
       ${patched}
     })
   `
@@ -77,6 +79,7 @@ function makeStream(src, overrides = {}) {
     looksTcmSession: overrides.looksTcmSession,
     looksTcmPrompt: overrides.looksTcmPrompt,
     versionOf: overrides.versionOf,
+    hint: overrides.hint,
   }
   return (chunks) => {
     async function* source() {
@@ -329,6 +332,21 @@ test('会话开场提醒：填了资料库就不提醒，正文仍在 0 号块',
   const texts = out.filter((c) => c.type === 'text-delta')
   assert.ok(texts.every((c) => c.index === 0), '不该挪块：' + JSON.stringify(texts))
   assert.equal(texts.map((c) => c.text).join(''), '第一句。')
+})
+
+test('问诊闭麦的那一轮：就算没填资料库，提醒也不许漏出来', async () => {
+  // 拆分时丢过这道闸：hint.muted 递进来了却没人读，闭麦轮照样插提醒。
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), {
+    kbNotice: () => '⚠️ 还没设定资料库目录',
+    currentPath: () => '',
+    hint: { muted: true },
+  })([START, TEXT('第一句。'), ...END])
+  const out = await collect(run)
+  assertAllBlocksLegal(out, '闭麦轮不提醒')
+  assertBlocksOpened(out, '闭麦轮不提醒')
+  assert.ok(!JSON.stringify(out).includes('⚠️'), '闭麦轮一个字都不许往外放，提醒也不行')
+  const texts = out.filter((c) => c.type === 'text-delta')
+  assert.ok(texts.every((c) => c.index === 0), '不提醒就不挪块')
 })
 
 test('不是中医会话：原样转发，一个字节都不动', async () => {

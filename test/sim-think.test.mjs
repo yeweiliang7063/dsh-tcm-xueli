@@ -448,3 +448,99 @@ test('调低前把原档写进存根，点评打完清掉', async () => {
   assert.equal(agent.model.current().reasoningEffort, 'medium', '点评打完交回原档')
   assert.equal(Object.keys(saved).length, 0, '存根用完即清')
 })
+
+test('面板局点评完自动收局：判完成绩先不收，等点评那一回合整个说完才归档', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const archived = []
+  const { thinker } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => { archived.push(id) },
+  })
+  const session = { id: 's-close' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-1'))
+  await tick()
+  thinker(session, open('请问怕冷吗？'))
+  thinker(session, open('交卷'))
+  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
+  assert.deepEqual(archived, [], '判完成绩那一刻点评还没写，不许归档（归了就把点评闸死）')
+
+  thinker(session, { type: 'turn/end', data: { turn: 3, reason: 'complete' } })
+  assert.deepEqual(archived, ['s-close'], '点评那一回合说完了，收局')
+  thinker(session, { type: 'turn/end', data: { turn: 4, reason: 'complete' } })
+  assert.deepEqual(archived, ['s-close'], '只收一次')
+})
+
+test('手打开局（没有局号）不归档：主聊天里做一局，做完还能接着聊', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const archived = []
+  const { thinker } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => { archived.push(id) },
+  })
+  const session = { id: 's-main' }
+
+  thinker(session, open('【模拟问诊 · 开局】'))
+  thinker(session, open('请问怕冷吗？'))
+  thinker(session, open('交卷'))
+  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
+  thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
+  assert.deepEqual(archived, [], '手打开局只走协议，不许把主聊天归档')
+})
+
+test('问诊中途的回合收尾不归档：只有判完成绩的那一局才收', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium'])
+  const archived = []
+  const { thinker } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => { archived.push(id) },
+  })
+  const session = { id: 's-mid' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-2'))
+  await tick()
+  thinker(session, open('请问口苦吗？'))
+  thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
+  assert.deepEqual(archived, [], '还没交卷判分，回合收尾不收局')
+})
+
+test('点评那一回合被打断：医生再开口时补着收局', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const archived = []
+  const { thinker } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => { archived.push(id) },
+  })
+  const session = { id: 's-cut' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-3'))
+  await tick()
+  thinker(session, open('交卷'))
+  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
+  // turn/end 没来（回合被打断）：医生再说话，先把这一局收起来
+  thinker(session, open('再给我讲讲'))
+  assert.deepEqual(archived, ['s-cut'], '判完成绩的局，医生再开口就补收')
+})
+
+test('弃局清掉待收登记：晚到的回合收尾不再归档', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const archived = []
+  const { thinker, release } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => { archived.push(id) },
+  })
+  const session = { id: 's-drop' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-4'))
+  await tick()
+  thinker(session, open('交卷'))
+  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
+  release('s-drop')
+  thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
+  assert.deepEqual(archived, [], '弃局由面板自己归档，开关不再补一次')
+})
