@@ -8,8 +8,17 @@
 //   4. 一块在流里抛错，回答照样往下走，另一块不受影响。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+// 测试绝不碰真身：插件里有个「启动 8 秒后照待清名单补删」的定时器，
+// 万一在测试进程里跑起来，DSH_HOME 得指到临时目录，读的是空名单，一个真会话也删不到。
+const TEST_HOME = mkdtempSync(join(tmpdir(), 'tcm-xueli-test-'))
+process.env.DSH_HOME = TEST_HOME
+test.after(() => {
+  try { rmSync(TEST_HOME, { recursive: true, force: true }) } catch { /* 临时目录清不掉不影响结果 */ }
+})
 
 /** 装成中医会话：提示词里带预设名，出口那一层才认得出该遮剂量。 */
 const TCM_SYSTEM = '预设：中医 · 经方（学习版）'
@@ -45,17 +54,40 @@ test('隔离：组装器只管组装', () => {
 })
 
 /** 造一个只够装插件的假宿主：记下 llm/stream 的回调，别的服务一律没有。 */
+const live = []
+test.afterEach(() => {
+  while (live.length > 0) {
+    const ctx = live.pop()
+    try { ctx.dispose() } catch { /* 清理失败不影响结果 */ }
+  }
+})
+
 function fakeCtx() {
   const handlers = []
-  return {
+  const cleanups = []
+  const ctx = {
     handlers,
+    cleanups,
     logger: { warn() {}, info() {} },
     on(event, fn) {
       if (event === 'llm/stream') handlers.push(fn)
       return () => {}
     },
-    effect() {},
+    // 真执行 effect 收到的函数（事件才挂得上），并把清理钩子收好，测试结束统一跑一遍：
+    // 丢清理钩子的话，插件里「启动 8 秒后补删」的定时器会跟着测试进程继续跑。
+    effect(fn) {
+      let off
+      try { off = fn() } catch { return }
+      if (typeof off === 'function') cleanups.push(off)
+    },
+    dispose() {
+      for (const off of cleanups.splice(0)) {
+        try { off() } catch { /* 清不掉不影响结果 */ }
+      }
+    },
   }
+  live.push(ctx)
+  return ctx
 }
 
 test('隔离：宿主什么都没有也不抛，两块都跳过、出口照旧放行', async () => {
@@ -106,14 +138,13 @@ test('隔离：问诊闭麦的那一轮，资料库提醒也不许漏出来', as
   const { apply } = await import('../lib/index.js')
   const ctx = fakeCtx()
   // 问诊的闭麦登记走 ctx.effect(() => ctx.on('session/event', …))：
-  // 假宿主得真执行 effect 收到的函数，事件才挂得上；inject 空转，免得开本机通道干等十秒。
+  // 假宿主的 effect 会真执行收到的函数（见 fakeCtx），事件才挂得上；inject 空转，免得开本机通道干等十秒。
   const events = []
   const baseOn = ctx.on
   ctx.on = (event, fn) => {
     if (event === 'session/event') { events.push(fn); return () => {} }
     return baseOn(event, fn)
   }
-  ctx.effect = (fn) => { try { fn() } catch { /* 注册失败就跳过 */ } }
   ctx.inject = () => {}
   apply(ctx, { kbPath: '', autoIndex: false })
   assert.ok(events.length > 0, '问诊的事件监听要挂上')

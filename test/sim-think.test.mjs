@@ -449,7 +449,7 @@ test('调低前把原档写进存根，点评打完清掉', async () => {
   assert.equal(Object.keys(saved).length, 0, '存根用完即清')
 })
 
-test('面板局点评完自动收局：判完成绩先不收，等点评那一回合整个说完才归档', async () => {
+test('点评说完就把这一局锁上：判完那一回合收尾才归档，锁完不再重复收', async () => {
   const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
   const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
   const archived = []
@@ -457,76 +457,21 @@ test('面板局点评完自动收局：判完成绩先不收，等点评那一�
     versionOf: () => 'xueli',
     archiveOf: (id) => { archived.push(id) },
   })
-  const session = { id: 's-close' }
+  const session = { id: 's-lock' }
 
-  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-1'))
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-9'))
   await tick()
-  thinker(session, open('请问怕冷吗？'))
   thinker(session, open('交卷'))
   thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
-  assert.deepEqual(archived, [], '判完成绩那一刻点评还没写，不许归档（归了就把点评闸死）')
-
+  assert.deepEqual(archived, [], '判卷那一刻点评还没写，这时收会把点评闸死')
   thinker(session, { type: 'turn/end', data: { turn: 3, reason: 'complete' } })
-  assert.deepEqual(archived, ['s-close'], '点评那一回合说完了，收局')
+  assert.deepEqual(archived, ['s-lock'], '点评整段说完就锁成只读')
+  thinker(session, open('这一局我再看两眼'))
   thinker(session, { type: 'turn/end', data: { turn: 4, reason: 'complete' } })
-  assert.deepEqual(archived, ['s-close'], '只收一次')
+  assert.deepEqual(archived, ['s-lock'], '锁过一次就不再重复收')
 })
 
-test('手打开局（没有局号）不归档：主聊天里做一局，做完还能接着聊', async () => {
-  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
-  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
-  const archived = []
-  const { thinker } = createSimThinker(ctx, {
-    versionOf: () => 'xueli',
-    archiveOf: (id) => { archived.push(id) },
-  })
-  const session = { id: 's-main' }
-
-  thinker(session, open('【模拟问诊 · 开局】'))
-  thinker(session, open('请问怕冷吗？'))
-  thinker(session, open('交卷'))
-  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
-  thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
-  assert.deepEqual(archived, [], '手打开局只走协议，不许把主聊天归档')
-})
-
-test('问诊中途的回合收尾不归档：只有判完成绩的那一局才收', async () => {
-  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
-  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium'])
-  const archived = []
-  const { thinker } = createSimThinker(ctx, {
-    versionOf: () => 'xueli',
-    archiveOf: (id) => { archived.push(id) },
-  })
-  const session = { id: 's-mid' }
-
-  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-2'))
-  await tick()
-  thinker(session, open('请问口苦吗？'))
-  thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
-  assert.deepEqual(archived, [], '还没交卷判分，回合收尾不收局')
-})
-
-test('点评那一回合被打断：医生再开口时补着收局', async () => {
-  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
-  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
-  const archived = []
-  const { thinker } = createSimThinker(ctx, {
-    versionOf: () => 'xueli',
-    archiveOf: (id) => { archived.push(id) },
-  })
-  const session = { id: 's-cut' }
-
-  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-3'))
-  await tick()
-  thinker(session, open('交卷'))
-  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
-  // turn/end 没来（回合被打断）：医生再说话，先把这一局收起来
-  thinker(session, open('再给我讲讲'))
-  assert.deepEqual(archived, ['s-cut'], '判完成绩的局，医生再开口就补收')
-})
-
-test('弃局清掉待收登记：晚到的回合收尾不再归档', async () => {
+test('弃局后晚到的回合收尾也不收局', async () => {
   const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
   const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
   const archived = []
@@ -542,5 +487,44 @@ test('弃局清掉待收登记：晚到的回合收尾不再归档', async () =>
   thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
   release('s-drop')
   thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
-  assert.deepEqual(archived, [], '弃局由面板自己归档，开关不再补一次')
+  assert.deepEqual(archived, [], '弃局交给面板（那边会删），开关不再补一刀')
+})
+
+test('主聊天里手打的局：点评完也不收、不锁，更不许当成面板的局删掉', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const archived = []
+  const { thinker, isPanelRound } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => { archived.push(id) },
+  })
+  const session = { id: 's-hand' }
+
+  // 没有局号：这是主聊天里手打开的一局。
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药'))
+  await tick()
+  thinker(session, open('交卷'))
+  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
+  thinker(session, { type: 'turn/end', data: { turn: 3, reason: 'complete' } })
+  assert.deepEqual(archived, [], '手打的局点评完不收：主聊天的历史不能被收走')
+  assert.equal(isPanelRound('s-hand'), false, '手打的局不是面板的，删除通道不许认')
+  assert.equal(agent.model.current().reasoningEffort, 'medium', '手打的局连思考档位都不碰')
+})
+
+test('面板开的局：认领之后一直认得出，弃局归档了也认得出', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const { thinker, release, isPanelRound } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: () => {},
+  })
+  const session = { id: 's-panel' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261122-7'))
+  assert.equal(isPanelRound('s-panel'), true, '面板开的局要认领')
+  release('s-panel')
+  assert.equal(isPanelRound('s-panel'), true, '弃局归档之后也得认得出，面板关掉时才删得掉')
+  assert.equal(isPanelRound('s-other'), false, '别的会话一概不认')
+  assert.equal(isPanelRound(''), false)
+  assert.equal(isPanelRound(undefined), false)
 })

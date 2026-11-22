@@ -140,6 +140,10 @@ test('模拟问诊：发话走 ready 解析出来的 SessionBinding，业务失�
   assert.ok(code.includes('pad(d.getSeconds())'), '局号要带秒，避免同一分钟撞号')
   assert.ok(code.includes('var archiveCurrent = function'), '换局/换难度要把旧局归档')
   assert.ok(code.includes('archiveCurrent();'), '换局时真的调归档')
+  assert.ok(code.includes('archiveCurrent(mine);'), '关掉面板时把这一局收走')
+  assert.ok(code.includes('if (keepRef.current) { keepRef.current = false; return; }'), '去会话页那一次不算收工')
+  assert.equal(code.includes('过往的局'), false, '不再留「过往的局」列表')
+  assert.equal(code.includes('function simScan'), false, '扫历史局的那套也一起去掉')
 })
 
 test('左列点历史会话：留在面板里换这一局；归档要能真收起来', () => {
