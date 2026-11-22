@@ -123,6 +123,68 @@ test('模拟问诊页：左侧有入口，能开一局并把开局话发进会�
   assert.ok(code.includes('xueli_begin_round') === false, '工具是宿主半的，客户端不该提工具名')
 })
 
+test('讲解答疑页：左侧有入口，能开一问并把开场话发进会话', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.ok(code.includes("var TE_PANEL = 'xueli-teach'"), '答疑页的 id 要写死')
+  assert.ok(code.includes("label: function () { return '讲解答疑'; }"), '左侧入口名字是「讲解答疑」')
+  assert.ok(code.includes('key: TE_PANEL'), '图标 id 与主面板 key 同名')
+  assert.ok(code.includes("var TE_CHAT_SLOT = 'xueli.teach.chat'"), '答疑自己要一个聊天子插槽')
+  assert.ok(code.includes("'【讲解答疑 · 开讲】\\n' + text"), '开场话要带固定开头，模型才切得进答疑口径')
+  assert.ok(code.includes('svc.create({ agentPreset: WB_PRESET })'), '开一问要用本插件预设')
+  assert.ok(code.includes('teCss(); wbCss()'), '答疑页也要注入工作台的聊天区样式')
+  assert.equal(code.includes('archiveSession'), true, '归档只是别的面板在用，答疑自己不该归档')
+  assert.equal(code.includes("fetch('/dsh-tcm-xueli/sim-end"), true, '删局通道只服务模拟问诊')
+  assert.ok(code.includes('问过的留着'), '答疑的局不删，要在提示里说明去哪找回来')
+  assert.ok(code.includes("nameAsk(id, text)"), '会话名字要按问题取，历史里才认得出来')
+})
+
+test('讲解答疑页：主面板、聊天槽、左侧入口都真注册上了', () => {
+  const { definition, fakeReact } = loadClient()
+  const stub = {}
+  const exports = definition.factory((name) => (name === 'react' ? fakeReact : stub))
+  const registered = []
+  const ctx = {
+    slots: {
+      inject(name, fn) { registered.push({ name, out: fn() }) },
+      register(spec, component) { return { spec, component } },
+    },
+  }
+  exports.apply(ctx)
+  const taps = registered.filter((r) => r.name === 'sidebar.panellist').map((r) => r.out.spec)
+  const teach = taps.find((s) => s.id === 'xueli-teach')
+  assert.ok(teach, '左侧没有讲解答疑入口')
+  assert.equal(teach.label(), '讲解答疑')
+  assert.equal(teach.order, 25, '入口排在模拟问诊之后')
+  const mains = registered.filter((r) => r.name === 'main').map((r) => r.out.spec)
+  assert.ok(mains.some((s) => s.key === 'xueli-teach'), '没有登记讲解答疑主面板')
+  assert.ok(registered.some((r) => r.name === 'xueli.teach.chat'), '没有登记答疑的聊天子插槽')
+  assert.ok(mains.every((s) => s.key === 'xueli-wb' || s.key === 'xueli-search' || s.key === 'xueli-sim' || s.key === 'xueli-teach'), '主面板 key 混进了别家的值')
+})
+
+test('讲解答疑模块自成一块：前后有起止标记，指纹锁在自检里', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  const a = code.indexOf('// >>> TEACH-BEGIN')
+  const b = code.indexOf('// <<< TEACH-END')
+  assert.ok(a > 0 && b > a, '答疑模块要有 TEACH-BEGIN / TEACH-END 标记，自检照这段算指纹')
+  const block = code.slice(a, b)
+  assert.ok(block.includes("var TE_PANEL = 'xueli-teach'"), '面板 id 要圈在这块里')
+  assert.ok(block.includes('function TeaPanel('), '答疑面板要圈在这块里')
+  assert.ok(block.includes('function TeIcon('), '左侧图标要圈在这块里')
+  assert.ok(block.includes('function teachRegister('), '注册函数要圈在这块里')
+  assert.equal(block.includes('function SimPanel('), false, '模拟问诊不在这块里，别把别人的代码圈进来')
+})
+
+test('讲解答疑：不归档、不删局，换问题只是回提问页', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  const start = code.indexOf('function TeaPanel(')
+  const end = code.indexOf('function TeIcon(')
+  assert.ok(start > 0 && end > start, '找不到答疑面板这一段')
+  const panel = code.slice(start, end)
+  assert.equal(panel.includes('archiveSession'), false, '答疑面板不许归档自己的会话')
+  assert.equal(panel.includes('purge=1'), false, '答疑面板不许走删局通道')
+  assert.ok(panel.includes('setSessionId(null)'), '换个问题只是回到提问页，别动这一局')
+})
+
 test('聊天面板：换局不会把已释放的句柄交给会话组件', () => {
   const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
   assert.equal(code.includes('refBox'), false, '不该再用 refBox 这种「渲染时读当前引用」的写法')

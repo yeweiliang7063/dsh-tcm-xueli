@@ -152,7 +152,7 @@ try {
   chk('lib/client.js 语法可解析', false, e.message);
 }
 const clientJs = fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8');
-for (const m of [`id: '${pkg.name}'`, "var NS = 'dsh-tcm-xueli'", "form.set('kbPath'", '学理模式', "var SIM_PANEL = 'xueli-sim'", "label: function () { return '模拟问诊'; }", "var SIM_CHAT_SLOT = 'xueli.sim.chat'"])
+for (const m of [`id: '${pkg.name}'`, "var NS = 'dsh-tcm-xueli'", "form.set('kbPath'", '学理模式', "var SIM_PANEL = 'xueli-sim'", "label: function () { return '模拟问诊'; }", "var SIM_CHAT_SLOT = 'xueli.sim.chat'", "var TE_PANEL = 'xueli-teach'", "label: function () { return '讲解答疑'; }", "var TE_CHAT_SLOT = 'xueli.teach.chat'"])
   chk(`lib/client.js 含「${m}」`, clientJs.includes(m));
 chk('lib/client.js 不再有挡位按钮', !clientJs.includes("form.set('level'"));
 chk('问诊记录列表带题面与方名，好避开重复', (() => { const clinic = fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8'); return clinic.includes("'题面 '") && clinic.includes("'方 '"); })());
@@ -182,6 +182,54 @@ chk('预设 id=dsh-tcm-xueli、order=5', cfg.id === 'dsh-tcm-xueli' && cfg.order
 chk('预设名注明学习版', String(cfg.name).includes('学习版'), cfg.name);
 const presetPrefix = String((((cfg.plugins || []).find((x) => x && x.id === 'persona') || {}).config || {}).prefix || '');
 chk('预设提示词含【模拟问诊】段落', presetPrefix.includes('【模拟问诊】'));
+chk('预设提示词含【讲解答疑】段落', presetPrefix.includes('【讲解答疑】') && presetPrefix.includes('【讲解答疑 · 开讲】'));
+chk('答疑按四段讲，且不摆十项问诊', presetPrefix.includes('答法固定四段') && presetPrefix.includes('不摆十项问诊清单'));
+chk('答疑引原文先核到才打引号', presetPrefix.includes('核不到只写「本库未核到依据」'));
+chk('答疑也不给剂量、处方笺、针法', presetPrefix.includes('不给克数、不给处方笺、不写针法'));
+// ---------- 6.5 讲解答疑模块的指纹锁 ----------
+// 这一块自成一体（客户端代码夹在 TEACH-BEGIN / TEACH-END 之间，口径夹在【讲解答疑】与
+// 「末尾两行声明照写，一处都不许省。」之间）。改插件别的部分不许顺手碰它；
+// 真要改，改完必须把下面两行指纹一起更新，否则这里报红——这就是「单独代码保护」。
+const TEACH_LOCK = {
+  client: 'a3fc460194fb8d0d3ba4b96c7d73ed9694b41060474315dcc785c59adb95a8e6',
+  prompt: '15d5b319d7ffd9f28eb30faf5eb995e345c33b4df03c8bdf2232ab5a3147cb1c',
+};
+function teachClientText() {
+  const src = clientJs.replace(/\r\n/g, '\n');
+  const a = src.indexOf('// >>> TEACH-BEGIN');
+  const b = src.indexOf('// <<< TEACH-END');
+  return a < 0 || b <= a ? '' : src.slice(a, b);
+}
+function teachPromptText() {
+  const a = presetPrefix.indexOf('【讲解答疑】');
+  const end = '末尾两行声明照写，一处都不许省。';
+  const b = presetPrefix.indexOf(end, a);
+  return a < 0 || b <= a ? '' : presetPrefix.slice(a, b + end.length);
+}
+const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+chk('讲解答疑模块自成一块（起止标记与口径段都在）', teachClientText().length > 2000 && teachPromptText().length > 500, `client=${teachClientText().length} prompt=${teachPromptText().length}`);
+chk('讲解答疑客户端代码未被顺手改动（指纹锁）', sha256(teachClientText()) === TEACH_LOCK.client, `实际指纹 ${sha256(teachClientText())}；确实改了就同步 TEACH_LOCK.client`);
+chk('讲解答疑口径未被顺手改动（指纹锁）', sha256(teachPromptText()) === TEACH_LOCK.prompt, `实际指纹 ${sha256(teachPromptText())}；确实改了就同步 TEACH_LOCK.prompt`);
+chk('答疑四段写固定编号，不许从「二」起', presetPrefix.includes('「一、结论」「二、判断轴与依据」「三、边界与变证」「四、还缺什么」') && presetPrefix.includes('不许从「二」起'));
+chk('答疑：脉缓与浮缓分开说、书名用全名', presetPrefix.includes('提纲写「脉缓」就是脉缓') && presetPrefix.includes('「浮缓风湿」是两个象合看') && presetPrefix.includes('不写《脉学》'));
+chk('答疑：分主次先说第一道门第二道门', presetPrefix.includes('第一道门是汗之有无加脉之紧缓') && presetPrefix.includes('不许说「有汗无汗不是第一眼要看的」'));
+chk('答疑：表与归纳句要和所列条文自己的治法一致', presetPrefix.includes('原文写「宜桂枝汤」「与桂枝汤，如前法」的') && presetPrefix.includes('表后必须补一句'));
+chk('答疑：先给中间态，不只给两极', presetPrefix.includes('桂枝麻黄各半汤、桂二麻一汤、大青龙汤'));
+chk('随库正文没有电子本缺字标记（KT/HT）', (() => {
+  const dir = path.join(PLUGIN, 'corpus');
+  let books = [];
+  try { books = fs.readdirSync(dir).filter((f) => f.endsWith('.txt')); } catch { return false; }
+  if (books.length < 9) return false;
+  const bad = books.filter((f) => /KT|HT/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
+  return bad.length === 0;
+})(), '还有书带着 KT/HT 缺字标记');
+chk('随库缺字已补回：项背强几几、目䀮䀮', (() => {
+  const dir = path.join(PLUGIN, 'corpus');
+  const sh = fs.readFileSync(path.join(dir, '03-伤寒论.txt'), 'utf8');
+  const sw = fs.readFileSync(path.join(dir, '01-黄帝内经素问.txt'), 'utf8');
+  return sh.includes('项背强几几') && sw.includes('目䀮䀮');
+})());
+chk('客户端：答疑面板不归档不删局', (() => { const start = clientJs.indexOf('function TeaPanel('); const end = clientJs.indexOf('function TeIcon('); if (start < 0 || end <= start) return false; const panel = clientJs.slice(start, end); return !panel.includes('archiveSession') && !panel.includes('purge=1'); })());
 chk('预设提示词写明开局指令格式', presetPrefix.includes('【模拟问诊 · 开局】'));
 chk('预设提示词让裁判记局（xueli_begin_round / xueli_finish_round）', presetPrefix.includes('xueli_begin_round') && presetPrefix.includes('xueli_finish_round'));
 chk('提示词：锚点只从工具结果拿、不对医生露', presetPrefix.includes('本局锚点只从 xueli_draw_anchor 的工具结果里拿') && presetPrefix.includes('一个字都不许出现在给医生看的任何文字里'));
