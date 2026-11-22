@@ -26,7 +26,7 @@ if (missing.length) {
   console.error('✖ 打包缺少：' + missing.join('、'))
   process.exit(1)
 }
-const books = files.filter((f) => f.startsWith('corpus/') && f.endsWith('.txt'))
+const books = files.filter((f) => /^corpus\/\d\d-.+\.md$/.test(f))
 if (books.length !== 10) {
   console.error(`✖ corpus 里的经典应为 10 本，实际 ${books.length} 本`)
   process.exit(1)

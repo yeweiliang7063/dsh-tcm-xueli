@@ -35,18 +35,18 @@ test('清单：schemastery 是运行时校验器，只放 dependencies，别再�
 
 test('随包十部经典齐全：少一本就算回归', () => {
   const want = [
-    '01-黄帝内经素问.txt',
-    '02-黄帝内经灵枢.txt',
-    '03-伤寒论.txt',
-    '04-金匮要略.txt',
-    '05-针灸甲乙经.txt',
-    '06-脉经.txt',
-    '07-濒湖脉学.txt',
-    '08-八十一难经.txt',
-    '09-桂林古本伤寒杂病论.txt',
-    '10-神农本草经.txt',
+    '01-黄帝内经素问.md',
+    '02-黄帝内经灵枢.md',
+    '03-伤寒论.md',
+    '04-金匮要略.md',
+    '05-针灸甲乙经.md',
+    '06-脉经.md',
+    '07-濒湖脉学.md',
+    '08-八十一难经.md',
+    '09-桂林古本伤寒杂病论.md',
+    '10-神农本草经.md',
   ]
-  const got = fs.readdirSync(path.join(ROOT, 'corpus')).filter((f) => f.endsWith('.txt')).sort()
+  const got = fs.readdirSync(path.join(ROOT, 'corpus')).filter((f) => /^\d\d-.+\.md$/.test(f)).sort()
   assert.deepEqual(got, want, 'corpus/ 里的经典与清单对不上')
 })
 

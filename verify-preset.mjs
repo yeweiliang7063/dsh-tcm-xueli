@@ -186,13 +186,16 @@ chk('预设提示词含【讲解答疑】段落', presetPrefix.includes('【讲�
 chk('答疑按四段讲，且不摆十项问诊', presetPrefix.includes('答法固定四段') && presetPrefix.includes('不摆十项问诊清单'));
 chk('答疑引原文先核到才打引号', presetPrefix.includes('核不到只写「本库未核到依据」'));
 chk('答疑也不给剂量、处方笺、针法', presetPrefix.includes('不给克数、不给处方笺、不写针法'));
+chk('三模块总开关在：进哪个模块只按哪套规则，安全底线全程生效', presetPrefix.includes('【三个模块，各管各的】') && presetPrefix.includes('进哪个模块只按哪一套规则办') && presetPrefix.includes('安全底线一律生效') && presetPrefix.includes('学习作答框架暂停'));
+chk('答疑切进来先暂停学习作答框架，不拿十项七段硬套', presetPrefix.includes('学习那套作答框架') && presetPrefix.includes('一律暂停') && presetPrefix.includes('不预设是哪一经哪一病'));
+chk('答疑覆盖随包经典各部，辨证按题目所属走', presetPrefix.includes('随包十部经典里的理法方药') && presetPrefix.includes('辨证按题目所属走'));
 // ---------- 6.5 讲解答疑模块的指纹锁 ----------
 // 这一块自成一体（客户端代码夹在 TEACH-BEGIN / TEACH-END 之间，口径夹在【讲解答疑】与
 // 「末尾两行声明照写，一处都不许省。」之间）。改插件别的部分不许顺手碰它；
 // 真要改，改完必须把下面两行指纹一起更新，否则这里报红——这就是「单独代码保护」。
 const TEACH_LOCK = {
-  client: 'a3fc460194fb8d0d3ba4b96c7d73ed9694b41060474315dcc785c59adb95a8e6',
-  prompt: '15d5b319d7ffd9f28eb30faf5eb995e345c33b4df03c8bdf2232ab5a3147cb1c',
+  client: '394b86db8a91b2a288c257a6de3e3830912f286f67ab836f0796521d11fc2d6d',
+  prompt: '2fe7a7969dac4ea7931a92ba7c10ca870de9fad1c35ef5fb92dd1efa821fc435',
 };
 function teachClientText() {
   const src = clientJs.replace(/\r\n/g, '\n');
@@ -201,7 +204,7 @@ function teachClientText() {
   return a < 0 || b <= a ? '' : src.slice(a, b);
 }
 function teachPromptText() {
-  const a = presetPrefix.indexOf('【讲解答疑】');
+  const a = presetPrefix.indexOf('\n【讲解答疑】');
   const end = '末尾两行声明照写，一处都不许省。';
   const b = presetPrefix.indexOf(end, a);
   return a < 0 || b <= a ? '' : presetPrefix.slice(a, b + end.length);
@@ -212,21 +215,28 @@ chk('讲解答疑客户端代码未被顺手改动（指纹锁）', sha256(teach
 chk('讲解答疑口径未被顺手改动（指纹锁）', sha256(teachPromptText()) === TEACH_LOCK.prompt, `实际指纹 ${sha256(teachPromptText())}；确实改了就同步 TEACH_LOCK.prompt`);
 chk('答疑四段写固定编号，不许从「二」起', presetPrefix.includes('「一、结论」「二、判断轴与依据」「三、边界与变证」「四、还缺什么」') && presetPrefix.includes('不许从「二」起'));
 chk('答疑：脉缓与浮缓分开说、书名用全名', presetPrefix.includes('提纲写「脉缓」就是脉缓') && presetPrefix.includes('「浮缓风湿」是两个象合看') && presetPrefix.includes('不写《脉学》'));
-chk('答疑：分主次先说第一道门第二道门', presetPrefix.includes('第一道门是汗之有无加脉之紧缓') && presetPrefix.includes('不许说「有汗无汗不是第一眼要看的」'));
-chk('答疑：表与归纳句要和所列条文自己的治法一致', presetPrefix.includes('原文写「宜桂枝汤」「与桂枝汤，如前法」的') && presetPrefix.includes('表后必须补一句'));
-chk('答疑：先给中间态，不只给两极', presetPrefix.includes('桂枝麻黄各半汤、桂二麻一汤、大青龙汤'));
+chk('答疑：分主次先说第一道门第二道门', presetPrefix.includes('就立哪一项为「第一道门」') && presetPrefix.includes('不许预设成某一项') && presetPrefix.includes('不许说「某某不是第一眼要看的」'));
+chk('答疑：表与归纳句要和所列条文自己的治法一致', presetPrefix.includes('归纳句必须和表里每一行自己的治法对得上') && presetPrefix.includes('表后必须补一句'));
+chk('答疑：先给中间态，不只给两极', presetPrefix.includes('先找中间态与轻证'));
 chk('随库正文没有电子本缺字标记（KT/HT）', (() => {
   const dir = path.join(PLUGIN, 'corpus');
   let books = [];
-  try { books = fs.readdirSync(dir).filter((f) => f.endsWith('.txt')); } catch { return false; }
+  try { books = fs.readdirSync(dir).filter((f) => /^\d\d-.+\.md$/.test(f)); } catch { return false; }
   if (books.length < 9) return false;
   const bad = books.filter((f) => /KT|HT/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
   return bad.length === 0;
 })(), '还有书带着 KT/HT 缺字标记');
+chk('随库十册都是 Markdown、开头写明来源是殆知阁', (() => {
+  const dir = path.join(PLUGIN, 'corpus');
+  let books = [];
+  try { books = fs.readdirSync(dir).filter((f) => /^\d\d-.+\.md$/.test(f)); } catch { return false; }
+  if (books.length !== 10) return false;
+  return books.every((f) => fs.readFileSync(path.join(dir, f), 'utf8').slice(0, 500).includes('来源：殆知阁'));
+})(), '随库应为十册 .md，且每册开头写明来源');
 chk('随库缺字已补回：项背强几几、目䀮䀮', (() => {
   const dir = path.join(PLUGIN, 'corpus');
-  const sh = fs.readFileSync(path.join(dir, '03-伤寒论.txt'), 'utf8');
-  const sw = fs.readFileSync(path.join(dir, '01-黄帝内经素问.txt'), 'utf8');
+  const sh = fs.readFileSync(path.join(dir, '03-伤寒论.md'), 'utf8');
+  const sw = fs.readFileSync(path.join(dir, '01-黄帝内经素问.md'), 'utf8');
   return sh.includes('项背强几几') && sw.includes('目䀮䀮');
 })());
 chk('客户端：答疑面板不归档不删局', (() => { const start = clientJs.indexOf('function TeaPanel('); const end = clientJs.indexOf('function TeIcon('); if (start < 0 || end <= start) return false; const panel = clientJs.slice(start, end); return !panel.includes('archiveSession') && !panel.includes('purge=1'); })());
@@ -436,7 +446,7 @@ if (!base) {
   note('资料库目录存在', fs.existsSync(base), base);
   if (fs.existsSync(base)) {
     note('索引.md 存在', fs.existsSync(path.join(base, '索引.md')));
-    note('随包经典已补到 text/', fs.existsSync(path.join(base, 'text', '03-伤寒论.txt')));
+    note('随包经典已补到 text/', fs.existsSync(path.join(base, 'text', '03-伤寒论.md')));
   }
 }
 
