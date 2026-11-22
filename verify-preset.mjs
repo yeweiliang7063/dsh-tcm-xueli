@@ -118,6 +118,32 @@ const guard = fs.readFileSync(path.join(PLUGIN, 'lib', 'dosage-guard.js'), 'utf8
 for (const m of ['hasDosage', 'maskDosage', 'NUM', 'DOSE_UNITS', 'QUOTE_MAX', 'quotedRanges', 'ARTICLE_MARK'])
   chk(`lib/dosage-guard.js 含「${m}」`, guard.includes(m));
 
+// ---------- 4.5 统一门卫 ----------
+// 插件里「谁能动什么」的判断都收在 lib/guard.js：出向认会话，入向认本机与面板局。
+const gateSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'guard.js'), 'utf8');
+chk('门卫文件齐全：本机判断/实例工厂/归档闸', gateSrc.includes('export function fromThisMachine') && gateSrc.includes('export function createGuard') && gateSrc.includes('export function ownPreset'));
+chk('删局/还档位/归档都有闸', gateSrc.includes('canRelease') && gateSrc.includes('canPurge') && gateSrc.includes('canArchive'));
+{
+  const dashangSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'dashang.js'), 'utf8');
+  const searchSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'search.js'), 'utf8');
+  const thinkSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8');
+  chk('本机判断只有一份：三条通道都从门卫引，不再各写一套',
+    dashangSrc.includes("from './guard.js'") && searchSrc.includes("from './guard.js'") && thinkSrc.includes("from './guard.js'")
+    && !searchSrc.includes('::ffff:127') && !dashangSrc.includes('localRemote'));
+}
+chk('弃局通道的还原/删除先过门卫', simSrc.includes('guard.canRelease(id)') && simSrc.includes('guard.canPurge(id)') && simSrc.includes('guard.canArchive(id)') && simSrc.includes('guard.bindPanel(isPanelRound)'));
+chk('组装器造门卫并交给两块共用', host.includes('createGuard()') && host.includes('api = { name, currentPath, versionOf, guard }'));
+{
+  // 会话识别引擎只从门卫出口走：除引擎自己与门卫，别的文件不许直接引 preset-scope
+  const libFiles = fs.readdirSync(path.join(PLUGIN, 'lib')).filter((n) => n.endsWith('.js') && n !== 'guard.js' && n !== 'preset-scope.js');
+  const direct = libFiles.filter((n) => fs.readFileSync(path.join(PLUGIN, 'lib', n), 'utf8').includes("'./preset-scope.js'"));
+  chk('会话识别统一走门卫出口', direct.length === 0, direct.join('、'));
+}
+{
+  const recSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8');
+  chk('归档闸也收进门卫', recSrc.includes('ownPreset(session, { currentPreset, preset })') && !recSrc.includes('LEGACY_PRESETS'));
+}
+
 // ---------- 5. 客户端半语法 ----------
 try {
   new vm.Script(fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8'), { filename: 'lib/client.js' });
@@ -323,7 +349,7 @@ try {
 note(`node_modules/${MOD} 指向当前插件目录`, sameTarget, INSTALLED);
 
 // ---------- 8. 副本一致性 ----------
-const files = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/xuexi.js', 'lib/sim.js', 'lib/gear.js', 'lib/dosage-guard.js', 'lib/preset.js', 'lib/client.js', 'lib/kb-index.js', 'lib/platform.js', 'lib/corpus.js', 'lib/records.js', 'lib/book-text.js', 'lib/book-classify.js', 'lib/auto-file.js', 'lib/clinic.js', 'lib/search.js', 'lib/preset-scope.js', 'lib/season.js', 'lib/dashang.js', 'lib/kb-root.js', 'lib/sim-think.js', 'lib/purge.js', 'lib/build-index.mjs'];
+const files = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/xuexi.js', 'lib/sim.js', 'lib/gear.js', 'lib/dosage-guard.js', 'lib/preset.js', 'lib/client.js', 'lib/kb-index.js', 'lib/platform.js', 'lib/corpus.js', 'lib/records.js', 'lib/book-text.js', 'lib/book-classify.js', 'lib/auto-file.js', 'lib/clinic.js', 'lib/search.js', 'lib/preset-scope.js', 'lib/season.js', 'lib/dashang.js', 'lib/kb-root.js', 'lib/sim-think.js', 'lib/purge.js', 'lib/guard.js', 'lib/build-index.mjs'];
 // 从 npm/git 装的副本会被 git 换成 CRLF，源目录是 LF；比内容不比行尾
 const md5 = (p) => createHash('md5').update(fs.readFileSync(p, 'utf8').replaceAll(String.fromCharCode(13) + String.fromCharCode(10), String.fromCharCode(10))).digest('hex');
 let diff = 0;

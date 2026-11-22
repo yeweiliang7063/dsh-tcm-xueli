@@ -12,6 +12,7 @@ const need = [
   'cordis.patch.yml',
   'lib/index.js',
   'lib/xuexi.js',
+  'lib/guard.js',
   'lib/purge.js',
   'lib/sim.js',
   'lib/gear.js',
