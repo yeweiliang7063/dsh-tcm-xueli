@@ -219,7 +219,7 @@ test('全角半角混写小数也遮：３.5克、3．5克', () => {
 test('高频漏网句式补遮：9克口服、9克分服、9克日二次', () => {
   assert.equal(blotDosage('桂枝9克口服'), '桂枝*口服')
   assert.equal(blotDosage('桂枝9克分服'), '桂枝*分服')
-  assert.equal(blotDosage('桂枝9克日二次'), '桂枝*日二次')
+  assert.equal(blotDosage('桂枝9克日二次'), '桂枝*日*')
   assert.ok(hasDosage('桂枝9克口服'))
 })
 
@@ -338,9 +338,13 @@ test('本轮口径：内经饮食、只遮克数、六部脉分开问、红线�
   // 旧口径必须真的退场：一律不许提吃的、未收可按通行说法讲药性
   assert.ok(!GEAR_GUARD.includes('一律不出任何可吃的东西'), '饮食禁令还在')
   assert.ok(!GEAR_GUARD.includes('照样可以按通行说法讲药性'), '凭记忆讲药性还在')
-  // 开头那行只写「**结论**：」，不带表情、不带方括号、不把急救信号塞进去
-  assert.ok(GEAR_GUARD.includes('**结论**：'), '开头结论行不见了')
-  assert.ok(!GEAR_GUARD.includes('大白话结论'), '旧标签「大白话结论」还在')
+  // 不要结论：开头不摆结论行，末尾也不补总结节
+  assert.ok(GEAR_GUARD.includes('10. 不作总结、不加结语，全文到七段为止'), '不作总结那条口径缺了')
+  assert.ok(!GEAR_GUARD.includes('正文最开头单独一行'), '开头结论行没退场')
+  assert.ok(!GEAR_GUARD.includes('## 结论'), '还有结论小节')
+  // 提问轮不写正文：先问，问齐了才动笔
+  assert.ok(GEAR_GUARD.includes('这一轮就只许调 ask_user_question 把问题弹出去，正文一个字都不写'), '提问轮不写正文那条丢了')
+  assert.ok(!GEAR_GUARD.includes('问诊没齐时正文第一段必须是固定小标题'), '旧的「先写线索再问」口径还在')
   assert.ok(!GEAR_GUARD.includes('👉'), '开头那个表情还在')
   assert.ok(!GEAR_GUARD.includes('立刻去医院'), '急救信号还塞在开头结论行里')
 })
@@ -349,4 +353,24 @@ test('9.4 不再挂着全量版的剂量铁律与处方笺条目', async () => {
   const { GEAR_GUARD } = await import('../lib/gear.js')
   assert.ok(GEAR_GUARD.includes('9.4 本节任何写法都不得越过'))
   assert.ok(!GEAR_GUARD.includes('【剂量铁律】的全部折算'))
+})
+
+test('询问病症口径：先定方类、君臣佐使连病机、服后核对、拿方来问也照七段', () => {
+  for (const keyword of [
+    '三、代表方名与加减方向（先定方类——这个证该往哪一类方走',
+    '按后世君臣佐使讲每味药在方里的分工（连病机讲）',
+    '三、代表方名与加减方向（先定方类、说清为什么走这一类',
+    '七、调护与就医提示（饮食起居情志原则、哪些反应说明方向对、哪些情况必须停药就医）',
+    '③方：先定方类——这个证该往哪一类方走、为什么是这一类',
+    '哪味打头、哪味辅、哪味监制、哪味引路',
+    '方类与方、君臣佐使、穴、服后核对',
+    '别人拿方子来问',
+    '说这张方跟这个证对不对得上',
+    '五段核配伍（十八反、十九畏、妊娠禁忌、毒性药同用）',
+    '以下是按方推测，不是结论',
+  ]) {
+    assert.ok(GEAR_GUARD.includes(keyword), `口径缺「${keyword}」`)
+  }
+  // 悬空的内部引用要退场：全文没有第 16.2 条
+  assert.ok(!GEAR_GUARD.includes('按 16.2 回答的时候'), '还留着指向不存在的 16.2 条的引用')
 })

@@ -1,11 +1,14 @@
 // 会话归档测试：整段会话一份 Markdown、文件名用标题、标题变化改名、只记录本预设。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+
+// 测试不碰真家目录：盐、锚点都落在临时目录里。
+process.env.DSH_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-records-home-'))
 import {
+  anchorDigest,
   answerText,
   appendSeenAnchor,
   clearMutedTurns,
@@ -302,7 +305,7 @@ test('思考档位存根最多留 50 条，新的挤掉旧的', () => {
 
 /* ── 最近几局：锚点只落摘要、旧明文迁移、并发串行、失败不静默 ── */
 
-const digestOf = (text) => createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12)
+const digestOf = (text) => anchorDigest(text)
 
 test('最近几局：锚点只落 sha256 短摘要，明文底牌不进医生可读的文件', async () => {
   const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-rounds-'))
@@ -495,4 +498,53 @@ test('recordSession：正文里引用别的会话号，不算那一局的文件�
   const fileA = recordSession({ kb, sessionId: 'session-aaaa1111', title: '同一个标题', events: [userEvent('头疼。'), assistantEvent('请补脉证。')], now: at })
   assert.equal(path.basename(fileA), '同一个标题 (2).md', '应加序号，不覆盖 B')
   assert.equal(fs.readFileSync(fileB, 'utf8'), bodyB, 'B 的文件原样不动')
+})
+
+test('createSessionRecorder：子智能体（扮演病人）会话不归档，晚到的子会话标记会把已存副本清掉', () => {
+  const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-subagent-skip-'))
+  const infos = []
+  const recorder = createSessionRecorder({
+    getKb: () => kb,
+    currentPreset: (session) => session.projectionPreset,
+    getTitle: (session) => session.title,
+    logger: { info: (...args) => infos.push(args), warn: () => {} },
+  })
+  const patient = {
+    id: 'session-patient001',
+    header: { agentPreset: 'dsh-tcm-xueli' },
+    title: '子会话测试',
+    snapshotEvents: () => [userEvent('病例卡不许泄露。'), assistantEvent('我咳嗽十来天了。')],
+  }
+  // 第一位：投影还没写子会话标记时先收到事件（按普通会话兜底写了一份）。
+  recorder(patient, assistantEvent('我咳嗽十来天了。', 2))
+  const dir = path.join(process.env.DSH_HOME, 'storages', 'session_projcache', 'sessions')
+  fs.mkdirSync(dir, { recursive: true })
+  const early = path.join(kb, RECORD_DIR, '子会话测试.md')
+  assert.ok(fs.existsSync(early), '标记未落盘前会先兜底归档一份')
+  // 子会话标记落盘（DSH 把这个会话记成 subagent）：下一条事件必须认出它，并删掉兜底副本。
+  fs.writeFileSync(path.join(dir, patient.id + '.json'), JSON.stringify({
+    version: 7,
+    record: { rows: { subagent: { val: { identity: { mode: 'continuable', label: '扮演病人', seq: 0 } } } } },
+  }))
+  recorder(patient, assistantEvent('我咳嗽十来天了。', 3))
+  assert.equal(fs.existsSync(early), false, '子会话的归档要被清掉')
+  assert.deepEqual(fs.readdirSync(path.join(kb, RECORD_DIR)), [], '医案目录里不留任何病人会话')
+})
+
+test('createSessionRecorder：标题是「扮演…病人」的会话即使投影还没标记也不归档', () => {
+  const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-roleplay-skip-'))
+  const recorder = createSessionRecorder({
+    getKb: () => kb,
+    currentPreset: (session) => session.projectionPreset,
+    getTitle: (session) => session.title,
+    logger: { info: () => {}, warn: () => {} },
+  })
+  const patient = {
+    id: 'session-patient002',
+    header: { agentPreset: 'dsh-tcm-xueli' },
+    title: '扮演咳嗽病人问诊 【中医 · 经方（学习版）】本节仅供学习',
+    snapshotEvents: () => [userEvent('病例卡：男，40 岁。'), assistantEvent('我咳嗽十来天了。')],
+  }
+  recorder(patient, assistantEvent('我咳嗽十来天了。', 2))
+  assert.equal(fs.existsSync(path.join(kb, RECORD_DIR)), false, '按标题就该认出是病人会话')
 })

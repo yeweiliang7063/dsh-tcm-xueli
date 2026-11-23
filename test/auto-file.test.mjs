@@ -45,7 +45,7 @@ test('autoFileBooks：按正文与书名移到对应文件夹', () => {
     assert.equal(existsSync(join(root, '经典', '伤寒论.txt')), true)
     assert.equal(existsSync(join(root, '经典注解', '胡希恕伤寒论讲座.txt')), true)
     assert.equal(existsSync(join(root, '医案', '人纪医案.txt')), true)
-    assert.equal(existsSync(join(root, '方药', '神农本草经.txt')), true)
+    assert.equal(existsSync(join(root, '经典', '神农本草经.txt')), true)
     assert.equal(existsSync(join(root, '名著', '世补斋医书.txt')), true)
     assert.equal(existsSync(join(root, '随手笔记.txt')), true)
   } finally {

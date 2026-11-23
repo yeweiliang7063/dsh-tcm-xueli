@@ -264,7 +264,7 @@ chk('闭嘴只认「答卷」两个字', (() => {
   return code.includes("String(said).includes('答卷')") && code.includes('quietly.add(sessionId)')
     && !code.includes('looksQuestion') && !code.includes('INJECTED_SOURCE') && !code.includes('nextLatch')
 })())
-chk('只有医生打「交卷」才切点评，且第一句就交卷也认', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const src = fs.readFileSync(path.join(PLUGIN, 'test', 'sim-think.test.mjs'), 'utf8'); return think.includes('function wantsHandIn(said)') && think.includes('if (wantsHandIn(said))') && !think.includes('isQuestion') && src.includes('开局之后第一句就是「交卷」也认'); })());
+chk('只有医生打「交卷」才切点评（不依赖 test/ 目录，npm 包里也能自检）', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('function wantsHandIn(said)') && think.includes('if (wantsHandIn(said))') && !think.includes('isQuestion'); })());
 chk('点评打完把档位交回去（judging + settleBack）', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('const judging = new Map()') && think.includes('const settleBack = (sessionId, previous)') && think.includes('const isFinishResult = (sessionId, data)') && think.includes("name === 'xueli_finish_round'"); })());
 chk('医案入库前先遮克数（题面/方名/一句话原因）', (() => { const clinic = fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8'); return clinic.includes('caseSummary: blotDosage(textOf(args.case_summary))') && clinic.includes('failLine: blotDosage(textOf(args.fail_line))') && clinic.includes('prescribe: blotDosage(textOf(args.prescribe))'); })());
 chk('调档只管模拟问诊这一局，普通聊天不碰', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8');
@@ -289,14 +289,17 @@ chk('五段与七段不许两套并存（9.5 与 16 同一结构）',
   prefix.includes('固定七段') && prefix.includes('按经方学理模式七段作答') &&
   !prefix.includes('固定五段') && !prefix.includes('作答结构固定五段'));
 chk('出方格式为学理模式七段，不再分详略档', prefix.includes('按经方学理模式七段作答') && !prefix.includes('详略只调'));
+chk('提问轮只弹按钮、正文一个字不写', prefix.includes('这一轮就只许调 ask_user_question 把问题弹出去，正文一个字都不写') && prefix.includes('提问轮里除了那几个问题一个字都不许出现'));
 chk('第一段硬格式：手上的线索 + 三行固定句式',
   prefix.includes('## 手上的线索') && prefix.includes('够定的是：') && prefix.includes('不够定的是：') && prefix.includes('所以要问的是：'));
 chk('线索清点含性别年龄体重脉象小便', ['性别未说', '体重未说', '脉象未问', '小便未问'].every((k) => prefix.includes(k)));
 chk('线索底数含体重与脉象', prefix.includes('这十项是定病定证的底数') && prefix.includes('体重与胖瘦、脉象（六部是必问项'));
 chk('六部脉必问，每部问出速缓沉浮', prefix.includes('六部是必问项、缺一部就不算问完、不许下结论') && prefix.includes('每部都要问出「速缓沉浮」'));
-chk('脉问的选项必须含「不急不慢」与「中」', prefix.includes('「不急不慢」和「中」这两个按钮必须真出现'));
+chk('脉问的正常选项只留一颗', prefix.includes('正常（不快不慢、不浮不沉）') && !prefix.includes('"label": "中"') && !prefix.includes('"label": "不急不慢"'));
 chk('ask_user_question 选项写成 label 对象，不许纯字符串', prefix.includes('{"label": "选项文字"}') && !prefix.includes('"options": ["'));
-chk('问不齐不许写结论行，只许接着问', prefix.includes('不许写「**结论**」那一行') && prefix.includes('「这只是方向，不是结论」「下面只说方向」不是免问的通行证'));
+chk('问不齐不许写证型方名穴名，只许接着问', prefix.includes('不许写证型、方名、穴名、药名、治法') && prefix.includes('「这只是方向，不是结论」「下面只说方向」不是免问的通行证'));
+chk('作答次序：线索→六经与时令→七段，末尾不加结论', prefix.includes('10. 不作总结、不加结语，全文到七段为止') && prefix.includes('④七段「七、调护与就医提示」写完就停') && !prefix.includes('## 结论'));
+chk('问齐后次序里不再有「**结论**」行', prefix.includes('问齐之后改按 21.5 的次序：「## 手上的线索」三行、「## 六经与时令」这一节、七段'));
 chk('没问齐只许再问不许动笔（判例在）', prefix.includes('典型的违规长这样') && prefix.includes('3 项「没问」的必须当场用 ask_user_question 问出去'));
 chk('方证主依据：五运六气（代码算好照抄）+ 八纲为基石六经为框架', prefix.includes('五运六气') && prefix.includes('以八纲为基石') && prefix.includes('以六经为框架') && prefix.includes('照抄，不许自己推干支') && prefix.includes('至真要大论'));
 chk('五种方法齐：整体/审因/四诊/辨病辨证/阴性症状', ['整体观念', '审证求因', '四诊合参', '辨病与辨证结合', '阴性症状'].every((k) => prefix.includes(k)));
@@ -309,16 +312,23 @@ chk('六经归属必须讲（不许只讲脏腑）', prefix.includes('先说这�
 chk('教材题不许豁免问诊', prefix.includes('只豁免「不接首诊、不开药」这一条') && prefix.includes('不许自称「这是教材题'));
 chk('时令必须落到治法方向', prefix.includes('只写一句「时令这段只作说明、不改上面的辨证」等于没写'));
 chk('讲第几气只许用当期六气，不许把下一气提前引', prefix.includes('第几气」只许用提示词') && prefix.includes('不许把下一气提前拿来用'));
-chk('报数要对一遍数，三类之和等于总数，漏项点名', prefix.includes('列完还要自己对一遍数') && prefix.includes('体重未说'));
+chk('报数要对一遍数，三类之和等于总数', prefix.includes('X 必须自己对一遍数') && prefix.includes('漏了项，重数再报'));
 chk('复述原文必须加引号，没引号按自己复述处理', prefix.includes('一律原样放进「」里') && prefix.includes('没加引号的一律按自己复述处理'));
 chk('报数只数十项，基础项单列不计入 X', prefix.includes('不计入 X') && prefix.includes('基础项：'));
 chk('七段第四段名两处一致（9.5 与 16 同一写法）', (prefix.split('四、推荐穴位（主穴、配穴与取穴依据，不写用法）').length - 1) === 2);
+chk('七段第三段先定方类、按君臣佐使讲分工（9.5 与 16 都写了）',
+  prefix.includes('三、代表方名与加减方向（先定方类——这个证该往哪一类方走') &&
+  prefix.includes('三、代表方名与加减方向（先定方类、说清为什么走这一类') &&
+  prefix.includes('按后世君臣佐使讲每味药在方里的分工（连病机讲）'));
+chk('七段第七段交代服后怎么核对方向、什么情况停药就医', prefix.includes('七、调护与就医提示（饮食起居情志原则、哪些反应说明方向对、哪些情况必须停药就医）'));
+chk('五格与定序都点名方类、君臣佐使、服后核对', prefix.includes('③方：先定方类——这个证该往哪一类方走') && prefix.includes('方类与方、君臣佐使、穴、服后核对'));
+chk('点评处方也核方类、君臣佐使与配伍禁忌', prefix.includes('说这张方跟这个证对不对得上') && prefix.includes('五段核配伍（十八反、十九畏、妊娠禁忌、毒性药同用）') && prefix.includes('君臣佐使立没立起来'));
 chk('参考文档不再残留固定五段', !prefix.includes('固定五段'));
 chk('五格齐全：证法方穴服后核对', prefix.includes('21.4 问诊问齐了（21.0 的十项与左右手六部脉都有交代') && prefix.includes('五格齐全，缺一格判不合格'));
 chk('方名核不到也必须给穴位', prefix.includes('方可以不报，穴必须给'));
 chk('不许摆两条路让人自己选', prefix.includes('「两条路，你选一条」判不合格'));
 chk('跳过不许撤掉证法穴', prefix.includes('⑸跳过项不许拖垮五格') && prefix.includes('把「等寒热定了再谈方穴」当收尾'));
-chk('六经与时令必须排在最前', prefix.includes('21.5 问诊齐了之后，开头的次序是固定的') && prefix.includes('「## 六经与时令」这一节'));
+chk('六经与时令必须排在最前', prefix.includes('21.5 问诊齐了之后，层次次序是固定的') && prefix.includes('「## 六经与时令」这一节') && prefix.includes('这一节排在「## 一、」「## 二、」这类编号小节之后，判不合格'));
 
 // ---------- 6.5 打赏码与六部脉计数 ----------
 const dashangSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'dashang.js'), 'utf8');
@@ -331,7 +341,7 @@ chk('学习版给了说法的回答也补打赏区：只看末尾那两句声明
 chk('收尾块排在末尾两行声明之后', xuexiSrc.includes("if (chunk.type === 'finish') yield* sendTail()") && !xuexiSrc.includes('DASHANG_BEFORE_SIGN'));
 chk('那两句免责声明由代码兜底：缺哪行补哪行，一行都不许少', dashangSrc.includes('export const DISCLAIMER') && dashangSrc.includes('export function missingDisclaimer') && dashangSrc.includes('不构成诊疗建议') && dashangSrc.includes('请自行核对原书后再用') && xuexiSrc.includes('missingDisclaimer(tailText)') && xuexiSrc.includes('lack.join') && !xuexiSrc.includes('giftSent'));
 chk('闭麦轮与非中医会话一个字都不添', xuexiSrc.includes('hint && hint.muted') && xuexiSrc.includes('if (!isTcmNow) return'))
-chk('只调工具、没写完的那一轮不收尾：免得一局贴好几遍声明', xuexiSrc.includes('let sawTool = false') && xuexiSrc.includes("chunk.type === 'tool-call') sawTool = true") && xuexiSrc.includes('if (sawTool) return') && xuexiSrc.includes("if (tailText.trim() === '') return"))
+chk('只调工具、还没写到收尾声明的那一轮不收尾：写了声明的照旧收尾，免得吞掉打赏', xuexiSrc.includes('let sawTool = false') && xuexiSrc.includes('isToolChunk(chunk)) sawTool = true') && xuexiSrc.includes('if (sawTool && !hasGiftSign(tailText)) return') && xuexiSrc.includes("if (tailText.trim() === '') return"))
 chk('提示词里不含打赏与收款码', !prefix.includes('打赏') && !prefix.includes('alipay.jpg') && !prefix.includes('dashang-qr.png') && !prefix.includes('请作者喝杯茶'));
 chk('打赏去重同时看开头和结尾', indexSrc.includes('tailText') && indexSrc.includes("tailText.includes('请作者喝杯茶')") && indexSrc.includes('if (head.length < 64) head += chunk.text'));
 chk('打赏图随包发布：拼好的一张、单张裁图两张', fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'dashang-qr.png')) && fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'alipay-qr.jpg')) && fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'wechat-qr.jpg')));
@@ -369,7 +379,7 @@ chk('不再按文件夹名字认库', !fs.readFileSync(path.join(PLUGIN, 'lib', 
 chk('各处提醒使用新的设置项名称', prefix.includes('设置 → 中医 · 经方（学习版）｜资料库目录') && !prefix.includes('中医 · 经方｜'));
 chk('首次使用提醒写清「第一次用」与「点保存」', fs.readFileSync(path.join(PLUGIN, 'lib', 'xuexi.js'), 'utf8').includes('这是第一次用') && fs.readFileSync(path.join(PLUGIN, 'lib', 'xuexi.js'), 'utf8').includes('再点保存'));
 chk('设置页保留首次使用的黄条提示', fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8').includes('第一次用还没有设定资料库'));
-chk('六部脉正常选项固定出现', prefix.includes('「数（跳得快）」「缓（跳得慢）」「不急不慢」') && prefix.includes('「浮（一按就摸到）」「沉（按到筋骨才摸到）」「中（不浮不沉）」'));
+chk('六部脉正常选项固定出现', prefix.includes('「数（跳得快）」「缓（跳得慢）」「正常（不快不慢、不浮不沉）」') && prefix.includes('「浮（一按就摸到）」「沉（按到筋骨才摸到）」再带上前一轮那颗「正常（不快不慢、不浮不沉）」'));
 chk('六部脉默认分两轮问快慢与深浅', prefix.includes('第一轮六部一部一问') && prefix.includes('第二轮再一部一问'));
 
 // ---------- 6.6 结构整理与三处医学补充 ----------
@@ -377,22 +387,28 @@ chk('口渴要问喜温喜冷', prefix.includes('想喝热的还是凉的') && p
 chk('口渴那一问给了四个按钮', prefix.includes('想喝热水') && prefix.includes('想喝凉水') && prefix.includes('口渴但不想咽'));
 chk('基础项补宿疾用药与月经妊娠', prefix.includes('宿疾与长期用药（含血压') && prefix.includes('月经与妊娠（只问女性'));
 chk('基础项仍不计入十项', prefix.includes('不计入 X（见 ⑫）'));
-chk('16.1 三组圈号各自顺号', (() => {
-  const i = prefix.indexOf('**写作纪律**：');
-  if (i < 0) return false;
-  const j = prefix.indexOf('17. ', i);
-  const got = (prefix.slice(i, j).match(/[①-⑳]/g) || []).join('');
-  return got === '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭';
-})(), '写作纪律一组须 ①–⑭ 顺号无重号');
+// 16.1（点评另走一套）与第 21 条（点评四步法）已撤：别人拿方子来问也照先问＋七段走，
+// 通用的两条写作纪律（治法抓根子、前说后说一致）挪到 10.3 与 10.4，不跟着丢。
+chk('点评不再另走一套：16.1 与第 21 条已撤', !prefix.includes('16.1 点评别人开好的方')
+  && !prefix.includes('21. 点评别人的方子')
+  && prefix.includes('别人拿方子来问'));
+chk('写作纪律并入 10.3 与 10.4', prefix.includes('10.3 治法要抓根子')
+  && prefix.includes('10.4 前说后说必须对得上'));
 chk('模拟问诊暂停句已去掉打赏字样', presetPrefix.includes('末尾两行声明一律暂停') && !presetPrefix.includes('打赏'));
-chk('第 21 条里 ⑤ 的后半归成 ⑤之三', prefix.includes('⑤之三，第三、四步的说法要能落地') && !prefix.includes('⑤第三、四步的说法要能落地'));
-chk('问诊轮不许写正文那句摘出末尾声明', prefix.includes('末尾两行声明照常写）'));
+chk('问诊轮不写正文也就不摆声明', prefix.includes('末尾两行声明也不写'));
+// 模型不问也不能就这么过去：出口把「不问也不写线索」的正文换成代码出的问诊卡，
+// 提问那一轮没有正文，声明与打赏也一并让开。
+chk('强制提问：模型不问就换成问诊卡', xuexiSrc.includes('forcedAskCard')
+  && xuexiSrc.includes('先把这几样说清')
+  && xuexiSrc.includes("gate.mode === 'replace'")
+  && xuexiSrc.includes('提问轮没有正文，声明与打赏都不摆'));
 
+chk('不许把计划和过程写进正文', prefix.includes('10.2 不许播报过程') && prefix.includes('等于把草稿端给对方看'));
 chk('前说后说只留一条', (prefix.split('前说后说必须对得上').length - 1) === 1);
 chk('24.1 紧跟第 24 条', (() => {
   const a = prefix.indexOf('24. 未核先报一律禁止');
   const b = prefix.indexOf('24.1 引述方子本身的事实');
-  const c = prefix.indexOf('21.1 四步法的第二步');
+  const c = prefix.indexOf('21.1 药味表在一份回答里只列一次');
   return a > 0 && b > a && c > b;
 })());
 

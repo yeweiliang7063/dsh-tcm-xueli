@@ -683,7 +683,7 @@ test('闭麦轮助手正文不进归档：thinker 打标，recordSession 跳过�
 
 /* ── 弃局通道的本机 CSRF 闸 ── */
 
-test('弃局通道只认本机页面：evil Origin/Referer 拒，GUI Referer 过，双缺过，远程拒', async () => {
+test('弃局通道只认本机页面：evil Origin/Referer 拒，GUI 来源过，双缺看 Fetch Metadata，远程拒', async () => {
   let handler = null
   const ctx = {
     get: (name) => (name === 'webServer' ? { register: (route) => { handler = route.handler; return () => {} } } : undefined),
@@ -704,7 +704,7 @@ test('弃局通道只认本机页面：evil Origin/Referer 拒，GUI Referer 过
   assert.equal(call({ host: '127.0.0.1:57443', origin: 'null' }), 403, '沙箱页 null Origin 拒')
   assert.equal(call({ host: '127.0.0.1:57443', referer: 'http://127.0.0.1:57443/' }), 200, 'GUI 本站 Referer 过')
   assert.equal(call({ host: '127.0.0.1:57443', origin: 'http://localhost:57443' }), 200, 'GUI 本站 Origin 过')
-  assert.equal(call({ host: '127.0.0.1:57443' }), 200, '双缺放行')
+  assert.equal(call({ host: '127.0.0.1:57443', 'sec-fetch-site': 'same-origin' }), 200, '双缺＋同源 fetch 放行')
   assert.equal(call({ host: '127.0.0.1:57443' }, '192.168.1.5'), 403, '远程拒')
   assert.equal(released.length, 3, '只有放行的请求才真弃局')
   assert.equal(purged.length, 3, '只有放行的请求才真删')

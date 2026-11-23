@@ -56,7 +56,7 @@ function fakeWeb() {
 }
 
 function fakeReq(method, url, remoteAddress = '127.0.0.1', extraHeaders = {}) {
-  return { method, url, headers: { host: '127.0.0.1:64368', ...extraHeaders }, socket: { remoteAddress, localAddress: '127.0.0.1' } }
+  return { method, url, headers: { host: '127.0.0.1:64368', 'sec-fetch-site': 'same-origin', ...extraHeaders }, socket: { remoteAddress, localAddress: '127.0.0.1' } }
 }
 
 function fakeRes() {
@@ -182,7 +182,7 @@ test('删除通道：缓存里没有、宿主认得的这一局也能删', async
   assert.equal(res.out.code, 200)
 })
 
-test('删除通道防 CSRF：外站 Origin／Referer 一律拒，本机页面与双缺才放行', async () => {
+test('删除通道防 CSRF：外站 Origin／Referer 一律拒，本机页面与同源 Fetch Metadata 才放行', async () => {
   const home = makeHome()
   putMeta(home, 'session-ok', TEACH_TITLE + '一问', 'dsh-tcm-xueli')
   const web = fakeWeb()
@@ -205,7 +205,7 @@ test('删除通道防 CSRF：外站 Origin／Referer 一律拒，本机页面与
   assert.equal(await ask(fakeReq('GET', url, '127.0.0.1', { origin: 'null' })), 403, '沙箱页的 null Origin 也拒')
   assert.equal(await ask(fakeReq('GET', url, '127.0.0.1', { origin: 'http://127.0.0.1:64368' })), 200, '同源 GUI 的 Origin 放行')
   assert.equal(await ask(fakeReq('GET', url, '127.0.0.1', { referer: 'http://127.0.0.1:64368/' })), 200, '同源 GUI 的 Referer 放行')
-  assert.equal(await ask(fakeReq('GET', url)), 200, 'Origin 与 Referer 双缺放行')
+  assert.equal(await ask(fakeReq('GET', url, '127.0.0.1', { 'sec-fetch-site': 'same-origin' })), 200, '双缺＋同源 fetch 放行')
   assert.equal(await ask(fakeReq('GET', url, '8.8.8.8', { origin: 'http://127.0.0.1:64368' })), 403, '远程来源一律拒')
   assert.deepEqual(purged, ['session-ok', 'session-ok', 'session-ok'], '只有放行的那三次才真删')
 })

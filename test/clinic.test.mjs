@@ -91,14 +91,14 @@ test('问诊工具真的注册得进：三个名字都交到宿主工具服务�
   release()
 })
 
-test('同一局号重开：上一局的结论不会带过来', async () => {
+test('同一局号不能重开重判：begin 给拒绝标记，旧结论保留', async () => {
   const store = createStore()
   await store.begin({ id: 'R-1', level: '普通', direction: '方药' })
   await store.end({ id: 'R-1', verdict: '不过关', failLine: '选错方' })
   const again = await store.begin({ id: 'R-1', level: '困难', direction: '针药' })
-  assert.equal(again.verdict, undefined)
-  assert.equal(again.failLine, undefined)
-  assert.equal(again.level, '困难')
+  assert.equal(again.alreadyFinished, true, '已判过的局号不能再开')
+  assert.equal(again.verdict, '不过关', '旧结论原样保留，不被清掉')
+  assert.equal(again.level, '普通', '题面也不被覆盖')
 })
 
 test('工具参数：难度、方向、结论只能填规定的那几个，不许自由发挥', async () => {

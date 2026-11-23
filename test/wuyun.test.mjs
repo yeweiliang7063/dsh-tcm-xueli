@@ -4,9 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ganzhiYear, qiOf, wuyunOf, wuyunText } from '../lib/season.js'
 
-test('干支以立春为界：二月三日仍算上一年，二月四日换新一年', () => {
-  assert.equal(ganzhiYear(new Date(2026, 1, 3)).stem + ganzhiYear(new Date(2026, 1, 3)).branch, '乙巳')
-  assert.equal(ganzhiYear(new Date(2026, 1, 4)).stem + ganzhiYear(new Date(2026, 1, 4)).branch, '丙午')
+test('干支以大寒为界：一月十九日仍算上一年，一月二十日换新一年', () => {
+  assert.equal(ganzhiYear(new Date(2026, 0, 19)).stem + ganzhiYear(new Date(2026, 0, 19)).branch, '乙巳')
+  assert.equal(ganzhiYear(new Date(2026, 0, 20)).stem + ganzhiYear(new Date(2026, 0, 20)).branch, '丙午')
   const old = ganzhiYear(new Date(2024, 0, 10))
   assert.equal(old.stem + old.branch, '癸卯')
   assert.equal(old.zhongyun, '火运不及')

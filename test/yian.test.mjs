@@ -105,7 +105,7 @@ function fakeWeb() {
   return { register(o) { routes.push(o); return () => {} }, routes }
 }
 function fakeReq(method, url, remoteAddress = '127.0.0.1', extraHeaders = {}) {
-  return { method, url, headers: { host: '127.0.0.1:64368', ...extraHeaders }, socket: { remoteAddress, localAddress: '127.0.0.1' } }
+  return { method, url, headers: { host: '127.0.0.1:64368', 'sec-fetch-site': 'same-origin', ...extraHeaders }, socket: { remoteAddress, localAddress: '127.0.0.1' } }
 }
 function fakeRes() {
   const out = { code: 0, body: '' }

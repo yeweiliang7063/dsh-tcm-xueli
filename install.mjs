@@ -80,6 +80,7 @@ function findProfile(explicit) {
     .filter((d) => d.isDirectory() && fs.existsSync(path.join(base, d.name, 'package.json')))
     .map((d) => d.name)
   if (!names.length) die(`profile 目录里没有可用的 profile：${base}`, '先启动一次 DSH。')
+  if (!names.includes('desktop')) mark.warn(`没有 desktop profile，改用 ${names[0]}`)
   return path.join(base, names.includes('desktop') ? 'desktop' : names[0])
 }
 
@@ -107,29 +108,43 @@ function linkSource(profile) {
     }
     if (current && path.resolve(current) === path.resolve(HERE)) {
       mark.ok(`链接已存在且指向本源：${link}`)
-      return
+      return { link, created: false, bak: null }
     }
     bak = `${link}.bak-${stamp()}`
-    if (!DRY) fs.renameSync(link, bak)
-    mark.warn(`原位置被别的插件占着（多半是 npm 上的同名旧包），已改名备份：${path.basename(bak)}`)
+    if (!DRY) {
+      try {
+        fs.renameSync(link, bak)
+      } catch (e) {
+        die(`原位置改名备份失败：${e.message}`, '请先完全退出 DSH（从托盘退出）再重试。')
+      }
+    }
+    mark.warn(`原位置被别的插件占着（多半是 npm 上的同名旧包），${DRY ? '将' : '已'}改名备份：${path.basename(bak)}`)
   }
 
   if (DRY) {
     mark.info(`[演练] 会创建链接 ${link} → ${HERE}`)
-    return
+    return { link, created: false, bak: null }
   }
-  fs.mkdirSync(path.dirname(link), { recursive: true })
-  // Windows 用 junction，不需要管理员权限；macOS / Linux 用目录软链接。
   try {
-    fs.symlinkSync(HERE, link, process.platform === 'win32' ? 'junction' : 'dir')
-  } catch (e) {
-    // 建链接失败：把刚才改名备份的原位置还原回去，不能让用户原来的插件凭空消失。
-    if (bak) {
-      try { fs.renameSync(bak, link) } catch { /* 还原也失败就保留备份，下面报错里指明 */ }
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    // Windows 用 junction，不需要管理员权限；macOS / Linux 用目录软链接。
+    try {
+      fs.symlinkSync(HERE, link, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (e) {
+      // 建链接失败：把刚才改名备份的原位置还原回去，不能让用户原来的插件凭空消失。
+      if (bak) {
+        try { fs.renameSync(bak, link) } catch { /* 还原也失败就保留备份，下面报错里指明 */ }
+      }
+      die(`创建链接失败：${e.message}`, bak ? `原位置已尝试还原；若仍异常，备份在 ${path.basename(bak)}` : '请检查目录权限后重试。')
     }
-    die(`创建链接失败：${e.message}`, bak ? `原位置已尝试还原；若仍异常，备份在 ${path.basename(bak)}` : '请检查目录权限后重试。')
+  } catch (e) {
+    if (bak) {
+      try { fs.renameSync(bak, link) } catch { /* 保留备份，报错里指明 */ }
+    }
+    die(`创建安装目录失败：${e.message}`, bak ? `原位置已尝试还原；若仍异常，备份在 ${path.basename(bak)}` : '请检查目录权限后重试。')
   }
   mark.ok(`已创建链接 ${link} → ${HERE}`)
+  return { link, created: true, bak }
 }
 
 // ── 3. 写 profile ────────────────────────────────────────────────
@@ -149,11 +164,11 @@ function patchProfile(profile) {
 
   if (JSON.stringify(pkg) === before) {
     mark.ok('profile 配置已经是目标状态，无需改动')
-    return
+    return { file, bak: null }
   }
   if (DRY) {
     mark.info('[演练] 会更新 profile 的 package.json（依赖 + bundles）')
-    return
+    return { file, bak: null }
   }
   const bak = `${file}.bak-tcm-install-${stamp()}`
   fs.copyFileSync(file, bak)
@@ -162,9 +177,10 @@ function patchProfile(profile) {
   } catch (e) {
     // 写坏了就用备份还原，不能让 profile 的 package.json 变成半截 JSON。
     try { fs.copyFileSync(bak, file) } catch { /* 还原失败保留备份 */ }
-    die(`更新 profile 失败：${e.message}`, `已尝试用备份还原；备份在 ${path.basename(bak)}`)
+    throw new Error(`更新 profile 失败：${e.message}（已尝试用备份还原；备份在 ${path.basename(bak)}）`)
   }
   mark.ok(`profile 已更新（备份：${path.basename(bak)}）`)
+  return { file, bak }
 }
 
 // ── 4. 自检 ──────────────────────────────────────────────────────
@@ -208,6 +224,23 @@ function checkKb(kb) {
 }
 
 // ── 主流程 ───────────────────────────────────────────────────────
+/** 自检失败时把本次安装写入的东西退回去：新建的链接删掉、被顶掉的旧包换回来、profile 用备份还原。 */
+function rollbackInstall(linkInfo, profInfo) {
+  try {
+    if (linkInfo?.bak) {
+      try { fs.rmSync(linkInfo.link, { recursive: true, force: true }) } catch { /* 删不掉就继续还原 */ }
+      try { fs.renameSync(linkInfo.bak, linkInfo.link) } catch { /* 还原失败保留备份 */ }
+    } else if (linkInfo?.created) {
+      try { fs.rmSync(linkInfo.link, { recursive: true, force: true }) } catch { /* 删不掉就留着 */ }
+    }
+    if (profInfo?.bak) {
+      try { fs.copyFileSync(profInfo.bak, profInfo.file) } catch { /* 还原失败保留备份 */ }
+    }
+  } catch {
+    // 回滚尽力而为，不掩盖原始失败。
+  }
+}
+
 console.log('══ 中医预设「中医 · 经方（学习版）」安装脚本 ══' + (DRY ? '（演练模式，不改任何文件）' : ''))
 
 const profile = findProfile(argValue('--profile', null))
@@ -220,14 +253,27 @@ mark.info(`插件来源：${HERE}`)
 mark.info(`资料库：${kb || '未配置（插件不再预设目录）'}`)
 
 mark.step('安装插件')
-linkSource(profile)
+const linkInfo = linkSource(profile)
 
 mark.step('登记到 DSH')
-patchProfile(profile)
+let profInfo = null
+try {
+  profInfo = patchProfile(profile)
+} catch (error) {
+  rollbackInstall(linkInfo, null)
+  console.error('\n登记 profile 失败：' + error.message)
+  console.error('已把本次创建/改名的插件链接还原；profile 的 package.json 也按备份还原。')
+  process.exit(1)
+}
 
 mark.step('自检')
 const ok = DRY ? true : verify(profile)
 if (DRY) mark.info('[演练] 跳过实际校验')
+if (!ok) {
+  rollbackInstall(linkInfo, profInfo)
+  console.log('\n自检没通过：插件文件、依赖或 bundles 没登记全，已把本次安装回滚。')
+  process.exit(1)
+}
 
 mark.step('资料库检查')
 checkKb(kb)
@@ -240,7 +286,8 @@ if (ok && !DRY) {
     env: { ...process.env, TCM_PROFILE: profile, TCM_KB_PATH: kb },
   })
   if (r.status !== 0) {
-    console.log('\n安装已写入，但静态自检未全过。按上面的 FAIL 项修好后再重启 DSH。')
+    rollbackInstall(linkInfo, profInfo)
+    console.log('\n静态自检未全过，已把本次安装写入的链接与 profile 改动回滚。按上面的 FAIL 项修好后再装。')
     process.exit(1)
   }
 }

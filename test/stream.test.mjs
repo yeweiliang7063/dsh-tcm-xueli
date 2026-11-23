@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hasDosage, blotDosage, quoteSafeCut } from '../lib/dosage-guard.js'
 import { dashangBlock, hasGiftSign, missingDisclaimer } from '../lib/dashang.js'
+import { isToolChunk, forcedAskCard } from '../lib/xuexi.js'
 
 const XUEXI = join(import.meta.dirname, '..', 'lib', 'xuexi.js')
 const SIM = join(import.meta.dirname, '..', 'lib', 'sim.js')
@@ -53,7 +54,10 @@ function makeStream(src, overrides = {}) {
 
   const harness = `
     return (async function* (options, next, deps) {
-      const { hasDosage, blotDosage, quoteSafeCut, dashangBlock, hasGiftSign, missingDisclaimer, ctx, name, SCAN_WINDOW } = deps
+      const { hasDosage, blotDosage, quoteSafeCut, dashangBlock, hasGiftSign, missingDisclaimer, isToolChunk, ctx, name, SCAN_WINDOW } = deps
+      // 强制提问的两件模块内函数：真用到时才给真的，别的用例给空实现，互不打扰。
+      const talkState = deps.talkState || (() => ({ user: [], clue: false }))
+      const forcedAskCard = deps.forcedAskCard || (() => '')
       // 会话开场提醒要查资料库路径和会话类型：默认当「已经填了路径、就是中医会话」。
       const NOTICE_BLOCK = 0
       const kbNoticed = new Set()
@@ -77,6 +81,9 @@ function makeStream(src, overrides = {}) {
     dashangBlock,
     hasGiftSign,
     missingDisclaimer,
+    isToolChunk,
+    forcedAskCard: overrides.forcedAskCard,
+    talkState: overrides.talkState,
     ctx: { logger: { warn() {} }, on() {} },
     name: 'dsh-tcm-xueli',
     SCAN_WINDOW: 600,
@@ -643,11 +650,13 @@ test('免责声明：只调工具、没写正文的那一轮不补', async () =>
   // 一轮里先调 grep 再写答案的情况很常见；提前补声明就会一局贴好几遍。
   const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-tool-only' } })([
     START,
-    { type: 'tool-call', index: 1, name: 'grep', input: { pattern: '柴胡' } },
+    { type: 'block-start', index: 1, blockType: 'tool-call' },
+    { type: 'tool-call-delta', index: 1, id: 'c1', name: 'grep', argumentsDelta: '{"pattern":"柴胡"}' },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'c1', name: 'grep', arguments: '{"pattern":"柴胡"}' } },
     { type: 'finish', reason: 'tool-calls' },
   ])
   const out = await collect(run)
-  const texts = out.filter((c) => c.type === 'tool-call')
+  const texts = out.filter((c) => c.type === 'block-end' && c.block && c.block.type === 'tool-call')
   assert.equal(texts.length, 1, '工具块照旧转发')
   const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
   assert.equal(joined, '', '没写正文就不许贴声明：' + joined)
@@ -657,7 +666,9 @@ test('免责声明：写了字又调工具的那一轮也不收尾，等真正�
   const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-tool-after-text' } })([
     START,
     TEXT('我先查一下原文。'),
-    { type: 'tool-call', index: 1, name: 'grep', input: { pattern: '柴胡' } },
+    { type: 'block-start', index: 1, blockType: 'tool-call' },
+    { type: 'tool-call-delta', index: 1, id: 'c1', name: 'grep', argumentsDelta: '{"pattern":"柴胡"}' },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'c1', name: 'grep', arguments: '{"pattern":"柴胡"}' } },
     { type: 'finish', reason: 'tool-calls' },
   ])
   const out = await collect(run)
@@ -740,4 +751,61 @@ test('打赏区：模拟问诊面板开的局，学习版这层不再补第二�
   const out = await collect(run)
   const gift = out.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png'))
   assert.equal(gift.length, 0, '面板局打赏归模拟问诊按十局算，这层不许补')
+})
+
+test('工具流块：开始、增量、收块三种形态都认，普通文字不误认', () => {
+  assert.equal(isToolChunk({ type: 'block-start', index: 0, blockType: 'tool-call' }), true)
+  assert.equal(isToolChunk({ type: 'tool-call-delta', index: 0, id: 'c1', name: 'read', argumentsDelta: '{}' }), true)
+  assert.equal(isToolChunk({ type: 'block-end', index: 0, block: { type: 'tool-call', id: 'c1', name: 'read', arguments: '{}' } }), true)
+  assert.equal(isToolChunk({ type: 'tool-call' }), true, '旧形态也保留')
+
+  assert.equal(isToolChunk({ type: 'text-delta', index: 0, text: '太阳之为病' }), false)
+  assert.equal(isToolChunk({ type: 'block-start', index: 0, blockType: 'text' }), false)
+  assert.equal(isToolChunk({ type: 'block-end', index: 0, block: { type: 'text', text: '太阳之为病' } }), false)
+  assert.equal(isToolChunk(null), false)
+})
+
+test('强制提问：模型不问、直接开讲七段，正文换成问诊卡，且不摆声明与打赏', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { talkState: () => ({ user: ['肚子胀两个多月了'], clue: false }), forcedAskCard })
+  const answer = '一、辨证定位：太阳中风，营卫不和。三、代表方：桂枝汤加减。'
+  const out = await collect(run([
+    START,
+    TEXT(answer),
+    { type: 'block-end', index: 0, block: { type: 'text', text: answer } },
+    { type: 'usage', tokens: 10 },
+    { type: 'finish', reason: 'stop' },
+  ]))
+  assertAllBlocksLegal(out, '强制提问')
+  assertBlocksOpened(out, '强制提问')
+  const shown = out.filter((c) => c.type === 'block-end').map((c) => c.block?.text || '').join(String.fromCharCode(10))
+  assert.ok(shown.includes('先把这几样说清'), '没有换成问诊卡：' + shown.slice(0, 80))
+  assert.ok(!shown.includes('桂枝汤加减'), '分析正文没被拦下：' + shown.slice(0, 80))
+  assert.ok(!shown.includes('本节仅供学习研究'), '提问轮不该摆免责声明')
+  assert.ok(!shown.includes('喝杯茶'), '提问轮不该摆打赏码')
+})
+
+test('强制提问：这一轮写了「手上的线索」，正文照常放行', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { talkState: () => ({ user: ['肚子胀两个多月了'], clue: false }), forcedAskCard })
+  const answer = ['## 手上的线索', '够定的是：太阳中风。', '所以要问的是：脉浮缓还是浮紧。', ''].join(String.fromCharCode(10))
+  const out = await collect(run([
+    START,
+    TEXT(answer),
+    { type: 'block-end', index: 0, block: { type: 'text', text: answer } },
+    { type: 'usage', tokens: 10 },
+    { type: 'finish', reason: 'stop' },
+  ]))
+  const shown = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  assert.ok(shown.includes('## 手上的线索'), '线索正文被吞了：' + shown.slice(0, 80))
+  assert.ok(!shown.includes('先把这几样说清'), '写了线索还被换成问诊卡')
+})
+
+test('强制提问：问诊卡只问还没答到的项，说了不用问就不塞', () => {
+  const card = forcedAskCard('')
+  assert.ok(card.includes('1.'), '空会话也该出问诊卡')
+  assert.ok(card.includes('手上的线索 → 六经与时令 → 七段'), '卡尾要交代下一步')
+  const answered = forcedAskCard('肚子胀两个多月，怕冷，大便两天一次，小便偏黄，胃口一般，睡得浅，舌淡有齿痕')
+  assert.ok(!answered.includes('大便几天一次'), '答过大便还在问')
+  assert.ok(!answered.includes('舌头什么样'), '答过舌象还在问')
+  assert.ok(answered.includes('出汗'), '没答到的项要留着问')
+  assert.equal(forcedAskCard('不用问了，直接点评这个方子'), '', '对方说不用问，不许硬塞问卷')
 })

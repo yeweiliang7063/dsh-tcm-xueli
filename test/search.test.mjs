@@ -143,15 +143,15 @@ test('读资料库：GBK 编码的书按探测解码，内容搜得到', async (
   }
 })
 
-test('读资料库：递归深度超过 4 层的不再收', async () => {
+test('读资料库：递归深度超过 6 层的不再收', async () => {
   const root = await mkdtemp(join(tmpdir(), 'tcm-search-depth-'))
   try {
-    await mkdir(join(root, 'text', 'a', 'b', 'c', 'd', 'e'), { recursive: true })
-    await writeFile(join(root, 'text', 'a', 'b', 'c', 'd', '浅书.txt'), '这本书在第四层子目录里，内容足够长，应当被收进检索范围。\n', 'utf8')
-    await writeFile(join(root, 'text', 'a', 'b', 'c', 'd', 'e', '深书.txt'), '这本书在第五层子目录里，内容足够长，但不该被收进检索范围。\n', 'utf8')
+    await mkdir(join(root, 'text', 'a', 'b', 'c', 'd', 'e', 'f'), { recursive: true })
+    await writeFile(join(root, 'text', 'a', 'b', 'c', 'd', 'e', '浅书.txt'), '这本书在第六层子目录里，内容足够长，应当被收进检索范围。\n', 'utf8')
+    await writeFile(join(root, 'text', 'a', 'b', 'c', 'd', 'e', 'f', '深书.txt'), '这本书在第七层子目录里，内容足够长，但不该被收进检索范围。\n', 'utf8')
     const corpus = await loadCorpus(root)
-    assert.ok(corpus.some((x) => x.source.includes('浅书')), '第 4 层要收')
-    assert.ok(!corpus.some((x) => x.source.includes('深书')), '第 5 层不收')
+    assert.ok(corpus.some((x) => x.source.includes('浅书')), '第 6 层要收')
+    assert.ok(!corpus.some((x) => x.source.includes('深书')), '第 7 层不收')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -191,4 +191,36 @@ test('本草条目：别名能查到，长得像的药名不误伤', () => {
   assert.equal(got[0].meta.origin, '山谷')
   assert.equal(findHerbEntries(corpus, '大黄', 4).length, 0, '大黄豆卷不算大黄')
   assert.equal(findHerbEntries(corpus, '桂枝汤', 4).length, 0, '超过六个字不当单味药')
+})
+
+test('定稿格式：无 # 标题、1．条号、方名与药味跨空行合并', () => {
+  const raw = [
+    '辨太阳病脉证并治上 合一十六法，方一十四首',
+    '　　1．太阳之为病，脉浮，头项强痛而恶寒。',
+    '',
+    '　　桂枝汤方',
+    '',
+    '　　桂枝三两，芍药三两，甘草二两，生姜三两，大枣十二枚。',
+  ].join('\n')
+  const got = splitPassages('03-伤寒论.txt', raw)
+  assert.equal(got[0].source, '伤寒论 · 辨太阳病脉证并治上 · 第1条')
+  assert.ok(got.some((x) => x.text.startsWith('桂枝汤方 桂枝三两')), '方名要和药味并成一段')
+})
+
+test('定稿格式：本草别名 桂枝/桂心/肉桂 都查得到牡桂条', () => {
+  const corpus = [{ source: '神农本草经 · 卷一·上经', text: '牡桂味辛，温。主上气咳逆，结气，喉痹吐吸。' }]
+  for (const q of ['牡桂', '桂枝', '桂心', '肉桂']) {
+    const got = findHerbEntries(corpus, q, 4)
+    assert.equal(got.length, 1, q + ' 应查到牡桂条')
+    assert.ok(got[0].original.startsWith('牡桂'))
+  }
+})
+
+test('方名排序：整串开头的方名排在超串前面', () => {
+  const corpus = [
+    { source: '伤寒论 · 辨胸痹病', text: '枳实薤白桂枝汤方 枳实四枚，厚朴四两。' },
+    { source: '伤寒论 · 辨太阳病', text: '桂枝汤方 桂枝三两，芍药三两。' },
+  ]
+  const got = findPassages(corpus, '桂枝汤', 2)
+  assert.equal(got[0].source, '伤寒论 · 辨太阳病')
 })

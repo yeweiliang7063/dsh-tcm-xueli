@@ -51,11 +51,20 @@ test('干支：丙午年（2026）的中运与司天在泉查表正确', () => {
   assert.equal(g.zaiquan, '阳明燥金')
 })
 
-test('干支：立春前算上一年，乙巳年金运不及', () => {
-  const g = ganzhiYear(new Date(2026, 0, 20))
+test('干支：大寒前算上一年，乙巳年金运不及', () => {
+  const g = ganzhiYear(new Date(2026, 0, 19))
   assert.equal(g.year, 2025)
   assert.equal(g.stem + g.branch, '乙巳')
   assert.equal(g.zhongyun, '金运不及')
+})
+
+test('干支：大寒当天交新岁，2026 年 1 月 20 日起是丙午年', () => {
+  const g = ganzhiYear(new Date(2026, 0, 20))
+  assert.equal(g.year, 2026)
+  assert.equal(g.stem + g.branch, '丙午')
+  assert.equal(g.zhongyun, '水运太过')
+  assert.equal(g.sitian, '少阴君火')
+  assert.equal(g.zaiquan, '阳明燥金')
 })
 
 test('时令文案要带上干支与运气底盘，并说明只给底盘不许自编', () => {

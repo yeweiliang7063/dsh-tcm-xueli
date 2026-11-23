@@ -54,13 +54,16 @@ test('本机页面判断：外站 Origin／Referer 一律拒，哪怕连接就�
   assert.equal(fromLocalPage(pageReq({ origin: 'https://evil.example.com', referer: 'http://127.0.0.1:59174/' })), false, 'Origin 优先：外站 Origin 不被好 Referer 救回')
 })
 
-test('本机页面判断：同源 GUI 的 Origin／Referer 过，双缺也过', () => {
+test('本机页面判断：同源 GUI 的 Origin／Referer 过，双缺按 Fetch Metadata 判', () => {
   assert.equal(fromLocalPage(pageReq({ origin: 'http://127.0.0.1:59174' })), true, 'GUI Origin 过')
   assert.equal(fromLocalPage(pageReq({ origin: 'http://localhost:59174' })), true)
   assert.equal(fromLocalPage(pageReq({ origin: 'http://[::1]:59174' })), true)
   assert.equal(fromLocalPage(pageReq({ referer: 'http://127.0.0.1:59174/' })), true, 'GUI Referer 过')
-  assert.equal(fromLocalPage(pageReq({})), true, '双缺过')
-  assert.equal(fromLocalPage(pageReq({ origin: '', referer: '' })), true, '空头按缺处理')
+  assert.equal(fromLocalPage(pageReq({ 'sec-fetch-site': 'same-origin' })), true, '双缺＋同源 fetch 过')
+  assert.equal(fromLocalPage(pageReq({ 'sec-fetch-site': 'none' })), true, '双缺＋地址栏直接打开过')
+  assert.equal(fromLocalPage(pageReq({})), false, '双缺又无 Fetch Metadata 拒（防 no-referrer 图片打本机）')
+  assert.equal(fromLocalPage(pageReq({ 'sec-fetch-site': 'cross-site' })), false, 'cross-site 拒')
+  assert.equal(fromLocalPage(pageReq({ origin: '', referer: '' })), false, '空头按缺处理')
 })
 
 test('本机页面判断：远程连接先被本机判断挡下，页面头再像也没用', () => {
@@ -154,7 +157,7 @@ test('弃局通道＋门卫：带个会话号进来，删不到也还原不了�
       writeHead(c) { this.code = c },
       end() { resolve(this) },
     }
-    route.handler({ method: 'GET', url, headers: { host: '127.0.0.1:59174' }, socket: { remoteAddress: remote } }, res)
+    route.handler({ method: 'GET', url, headers: { host: '127.0.0.1:59174', 'sec-fetch-site': 'same-origin' }, socket: { remoteAddress: remote } }, res)
   })
 
   const other = await ask('/dsh-tcm-xueli/sim-end?purge=1&session=s-other')

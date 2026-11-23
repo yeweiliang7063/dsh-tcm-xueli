@@ -1029,6 +1029,13 @@ test('医案⑤：MarkdownText 缺失降级纯文本不报错；存在则 props 
   assert.equal(md[0].props.omitHtml, true)
   assert.equal(md[0].props.variant, 'body')
   assert.deepEqual(md[0].props.labels, { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' })
+  // 本地图片要走宿主的 api/file 通道，不能把 D:/… 原样塞进 img src
+  assert.equal(typeof md[0].props.pathImages.resolve, 'function')
+  const localImg = md[0].props.pathImages.resolve('D:/a b/码.png')
+  assert.ok(localImg.includes('/api/file?path='), '本地绝对路径要改写成 api/file')
+  assert.ok(localImg.includes('D%3A%2Fa%20b%2F'), '路径要编码')
+  assert.equal(md[0].props.pathImages.resolve('assets/a.png'), undefined, '相对路径不改写')
+  assert.equal(md[0].props.pathImages.resolve('//server/a.png'), undefined, '网络路径不改写')
   // labels 身份稳定：两次渲染同一个对象
   const pane3 = withMd.exports.__test.YianPane({ doc, onClose() {} })
   const md2 = byType(pane3, FakeMarkdown)

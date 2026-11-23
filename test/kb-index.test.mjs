@@ -116,7 +116,7 @@ test('buildIndexMarkdown：按五类编排，同名文件夹优先', () => {
   assert.ok(rels('医案').includes('医案/某医案.txt'))
   assert.ok(rels('方药').includes('米晶子——济世良方.txt'))
   assert.ok(rels('方药').includes('伤寒论类方.txt'))
-  assert.ok(rels('方药').includes('神农本草经.txt'))
+  assert.ok(rels('经典').includes('神农本草经.txt'))
   assert.ok(rels('方药').includes('方药/某书.txt'))
 })
 
