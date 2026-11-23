@@ -1,3 +1,10 @@
+// 覆盖说明（如实）：本文件用 new Function＋fakeReact 在 Node 里跑 client.js，
+// 大部分断言是源码文本匹配；纯函数与隐藏样式/卸载清理另有 fakeDoc 行为断言。
+// 未覆盖面（本环境做不到，不假装覆盖）：
+// - 真实 React 渲染与 hooks 时序（fakeReact 的 useState/useEffect 不会重渲染）；
+// - fetch 竞态、20 秒超时与开局回收的异步时序（只断言代码路径存在）；
+// - 宿主真实 DOM、官方左栏行标记与隐藏样式实际生效；
+// - 服务端删除/归档通道的真实响应、会话服务的真实行为。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -7,8 +14,9 @@ import { dirname, join } from 'node:path'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 
-/** 在 Node 里模拟浏览器：接住 ModuleLoader 的登记，给一个最小的 react。 */
-function loadClient() {
+/** 在 Node 里模拟浏览器：接住 ModuleLoader 的登记，给一个最小的 react。
+ *  传 fakeDocument 时连 DOM 行为一起测；不传则 document=undefined，跟旧测试一样。 */
+function loadClient(fakeDocument) {
   const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
   let definition = null
   const win = { __ModuleLoader__: { load(def) { definition = def } } }
@@ -18,11 +26,44 @@ function loadClient() {
     useEffect() {},
     useRef(value) { return { current: value } },
   }
-  const sandbox = { window: win, document: undefined, console }
+  const sandbox = { window: win, document: fakeDocument, console }
   const run = new Function('window', 'document', 'console', code)
   run(sandbox.window, sandbox.document, sandbox.console)
   assert.ok(definition, 'client.js 没有调用 window.__ModuleLoader__.load')
   return { definition, fakeReact }
+}
+
+/** 最小假 DOM：只实现 client.js 真用到的那几个接口。
+ *  querySelectorAll 只认 style[data-plugin="…"] 这一种选择器，别的一律返回空。 */
+function fakeDoc() {
+  const head = {
+    children: [],
+    appendChild(el) { el.parentNode = head; head.children.push(el); return el },
+    removeChild(el) {
+      const i = head.children.indexOf(el)
+      if (i >= 0) head.children.splice(i, 1)
+      el.parentNode = null
+      return el
+    },
+  }
+  return {
+    head,
+    createElement(tag) {
+      return {
+        tagName: String(tag).toUpperCase(),
+        id: '',
+        textContent: '',
+        attrs: {},
+        setAttribute(k, v) { this.attrs[k] = String(v) },
+      }
+    },
+    getElementById(id) { return head.children.find((el) => el.id === id) || null },
+    querySelectorAll(sel) {
+      const m = /^style\[data-plugin="([^"]+)"\]$/.exec(sel)
+      if (!m) return []
+      return head.children.filter((el) => el.tagName === 'STYLE' && el.attrs['data-plugin'] === m[1])
+    },
+  }
 }
 
 test('浏览器半：登记名等于包名，能注册左侧图标与对应主面板', () => {
@@ -131,7 +172,11 @@ test('讲解答疑页：左侧有入口，能开一问并把开场话发进会�
   assert.ok(code.includes("var TE_CHAT_SLOT = 'xueli.teach.chat'"), '答疑自己要一个聊天子插槽')
   assert.ok(code.includes("'【讲解答疑 · 开讲】\\n' + text"), '开场话要带固定开头，模型才切得进答疑口径')
   assert.ok(code.includes('svc.create({ agentPreset: WB_PRESET })'), '开一问要用本插件预设')
-  assert.ok(code.includes('teCss(); wbCss()'), '答疑页也要注入工作台的聊天区样式')
+  assert.ok(code.includes('teCss();') && code.includes('wbCss();'), '答疑页也要注入工作台的聊天区样式');
+  assert.ok(code.includes('function teScan()'), '答疑自己扫一份历史');
+  assert.ok(code.includes('问过的（点一条接着问）'), '面板里要有自己那份历史列表');
+  assert.ok(code.includes('function teWhen(at)'), '历史行要带时间');
+  assert.ok(code.includes('openOld(row)'), '点一条就接着讲，不新建会话');
   assert.equal(code.includes('archiveSession'), true, '归档只是别的面板在用，答疑自己不该归档')
   assert.equal(code.includes("fetch('/dsh-tcm-xueli/sim-end"), true, '删局通道只服务模拟问诊')
   assert.ok(code.includes('问过的留着'), '答疑的局不删，要在提示里说明去哪找回来')
@@ -174,14 +219,17 @@ test('讲解答疑模块自成一块：前后有起止标记，指纹锁在自�
   assert.equal(block.includes('function SimPanel('), false, '模拟问诊不在这块里，别把别人的代码圈进来')
 })
 
-test('讲解答疑：不归档、不删局，换问题只是回提问页', () => {
+test('讲解答疑：历史能改名、归档、删除，删除走自己的通道', () => {
   const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
   const start = code.indexOf('function TeaPanel(')
   const end = code.indexOf('function TeIcon(')
   assert.ok(start > 0 && end > start, '找不到答疑面板这一段')
   const panel = code.slice(start, end)
-  assert.equal(panel.includes('archiveSession'), false, '答疑面板不许归档自己的会话')
-  assert.equal(panel.includes('purge=1'), false, '答疑面板不许走删局通道')
+  assert.ok(panel.includes('doTitle'), '要能改名')
+  assert.ok(panel.includes('archiveSession') && panel.includes('doArchive'), '要能归档')
+  assert.ok(panel.includes('unarchiveSession') && panel.includes('doRestore'), '归档的要能恢复')
+  assert.ok(panel.includes('teach-end?doing=delete'), '删除走答疑自己的通道')
+  assert.equal(panel.includes('purge=1'), false, '答疑面板不许走模拟问诊的删局通道')
   assert.ok(panel.includes('setSessionId(null)'), '换个问题只是回到提问页，别动这一局')
 })
 
@@ -247,7 +295,190 @@ test('左栏隐藏：只认会话行、卸载时停表，不乱藏标题像问�
   assert.ok(!code.includes('[class*="sessionRow"]'), '不许用模糊类名去藏')
   assert.ok(!code.includes("el.style.display = 'none'"), '不许逐行改内联样式，会闪')
   assert.ok(!code.includes('isSimTitle(el.textContent)'), '不许拿整行文字判断')
-  assert.ok(code.includes('return function () { stopHideSimRows(); };'), '卸载钩子里要停表')
+  assert.ok(code.includes('return function () { stopHideSimRows(); removePluginStyles(); };'), '卸载钩子里要停表并摘掉本插件全部样式')
   assert.ok(!code.includes('stopHideOwnRows'), '不许再调不存在的停表函数')
   assert.ok(!/exports\.inject = \[[^\]]*'remote'/.test(code), '没用的 remote 注入要去掉')
+})
+
+test('工作台历史也能删局：走本插件自己的通道，只认本插件预设', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  const start = code.indexOf('function WbPanel(')
+  const end = code.indexOf('function WbIcon(')
+  assert.ok(start > 0 && end > start, '找不到工作台这一段')
+  const panel = code.slice(start, end)
+  assert.ok(panel.includes('var doDelete = function'), '要有真删')
+  assert.ok(panel.includes('teach-end?doing=delete'), '删除走本插件自己的通道')
+  assert.ok(panel.includes("kind: 'delete'"), '删除前要问一句')
+  assert.equal(panel.includes('purge=1'), false, '不走模拟问诊的删局通道')
+})
+
+test('工作台历史不混答疑局：各归各的列表', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.ok(code.includes("indexOf('答疑·') === 0"), '工作台扫历史时要跳过答疑局');
+  assert.ok(code.includes("indexOf('问诊·局') === 0"), '问诊局照旧不进工作台');
+})
+
+/* ── 以下为定向修复的行为断言与同步断言 ── */
+
+test('纯函数行为：id 校验、隐藏集合增删、豁免标记只消费一次', () => {
+  const { definition, fakeReact } = loadClient()
+  const exports = definition.factory((name) => (name === 'react' ? fakeReact : {}))
+  const h = exports.__test
+  assert.ok(h, '要有 __test 钩子供行为断言')
+  // id 校验：只放行字母数字下划线连字符
+  assert.equal(h.simIdSafe('abc-123_X'), true)
+  assert.equal(h.simIdSafe(''), false)
+  assert.equal(h.simIdSafe('a"b'), false)
+  assert.equal(h.simIdSafe('a]b'), false)
+  assert.equal(h.simIdSafe('a b'), false)
+  assert.equal(h.simIdSafe(null), false)
+  assert.equal(h.simIdSafe(123), false)
+  // 入集合：合法才进，非法 id 不许污染隐藏集合
+  const set = {}
+  h.simHideAdd(set, 'round-1')
+  h.simHideAdd(set, 'bad"id')
+  assert.deepEqual(Object.keys(set), ['round-1'])
+  // 豁免：移出隐藏集、记入豁免集
+  const shown = {}
+  h.simHideRelease(set, shown, 'round-1')
+  assert.equal(set['round-1'], undefined)
+  assert.equal(h.simHideExempt(shown, 'round-1'), true)
+  assert.equal(h.simHideExempt(shown, 'round-2'), false)
+  // 非法 id 不动两份集合
+  h.simHideRelease(set, shown, 'x"y')
+  assert.equal(shown['x"y'], undefined)
+  // 显式收局豁免标记：置位消费一次就清，空引用/非 true 都安全
+  const ref = { current: true }
+  assert.equal(h.takeSkipFlag(ref), true)
+  assert.equal(ref.current, false)
+  assert.equal(h.takeSkipFlag(ref), false)
+  assert.equal(h.takeSkipFlag(null), false)
+  assert.equal(h.takeSkipFlag({ current: 'yes' }), false)
+})
+
+test('隐藏样式行为：非法 id 不进 CSS、豁免局不藏、卸载清干净', () => {
+  const doc = fakeDoc()
+  const { definition, fakeReact } = loadClient(doc)
+  const exports = definition.factory((name) => (name === 'react' ? fakeReact : {}))
+  const rows = {
+    'safe-1': { projectionValues: { agentPreset: 'dsh-tcm-xueli' } },
+    'bad"id': { projectionValues: { agentPreset: 'dsh-tcm-xueli' } },
+    'other-1': { projectionValues: { agentPreset: 'standard' } },
+  }
+  const ctx = {
+    slots: { inject() {}, register(spec, component) { return { spec, component } } },
+    sessions: { list: { getSnapshot: () => ({ ids: Object.keys(rows), byId: rows }) } },
+  }
+  exports.apply(ctx)
+  const h = exports.__test
+  const style = doc.getElementById('xw-hide-sim')
+  assert.ok(style, 'apply 后要注入隐藏样式')
+  assert.equal(style.attrs['data-plugin'], 'dsh-tcm-xueli', '隐藏样式要打本插件标记')
+  assert.ok(style.textContent.includes('[data-row-key="session:safe-1"]'), '本预设会话要藏')
+  assert.ok(!style.textContent.includes('bad"id'), '非法 id 不许拼进选择器')
+  assert.ok(!style.textContent.includes('other-1'), '别家预设不藏')
+  // 开过的问诊局并进隐藏集
+  h.simRoundIds['round-9'] = true
+  h.hideSimRows()
+  assert.ok(doc.getElementById('xw-hide-sim').textContent.includes('session:round-9'))
+  // 送去会话页：豁免后不再藏（回到官方左栏）
+  h.simHideRelease(h.simRoundIds, h.simShownIds, 'round-9')
+  h.hideSimRows()
+  assert.ok(!doc.getElementById('xw-hide-sim').textContent.includes('session:round-9'))
+  // 本预设的局同样能豁免（ownPresetIds 会藏整个预设，单删隐藏集不够）
+  h.simHideRelease(h.simRoundIds, h.simShownIds, 'safe-1')
+  h.hideSimRows()
+  assert.ok(!doc.getElementById('xw-hide-sim').textContent.includes('session:safe-1'))
+  // 卸载：停表、摘隐藏样式、原地清空两份集合（活引用仍有效）
+  h.stopHideSimRows()
+  assert.equal(doc.getElementById('xw-hide-sim'), null, '卸载要摘掉隐藏样式')
+  assert.deepEqual(Object.keys(h.simRoundIds), [])
+  assert.deepEqual(Object.keys(h.simShownIds), [])
+  // removePluginStyles 按标记摘：打标的摘掉，别家的和没打标的留着
+  const marked = doc.createElement('style'); marked.setAttribute('data-plugin', 'dsh-tcm-xueli'); doc.head.appendChild(marked)
+  const foreign = doc.createElement('style'); foreign.setAttribute('data-plugin', 'other-plugin'); doc.head.appendChild(foreign)
+  const plain = doc.createElement('style'); doc.head.appendChild(plain)
+  h.removePluginStyles()
+  assert.equal(marked.parentNode, null, '本插件的 style 要摘掉')
+  assert.ok(foreign.parentNode, '别家插件的 style 不许动')
+  assert.ok(plain.parentNode, '没打标的 style 不许动')
+})
+
+test('修复1/2：开局失败回收已建会话，预设建失败明报不回落', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.equal(code.includes('svc.create({})'), false, '不许静默回落默认预设（会丢人设/遮罩/档位）')
+  assert.equal((code.match(/var madeId = null/g) || []).length, 2, '两个面板都要记住已建会话 id')
+  assert.equal((code.match(/中医预设未就绪，请确认插件已启用后重试/g) || []).length, 2, '预设建失败两处都要明报')
+  assert.equal((code.match(/指令可能仍在排队，已回收该局，请重试。/g) || []).length, 2, '超时文案两处都要有')
+  assert.ok(code.includes('delete simRoundIds[madeId];'), '回收时把局移出隐藏集合')
+  assert.ok(code.includes('archiveCurrent(madeId)'), '模拟问诊回收已建会话走归档')
+  assert.ok(code.includes("fetch('/dsh-tcm-xueli/teach-end?doing=delete&session=' + encodeURIComponent(madeId)"), '答疑回收走自己的删除通道（服务端按预设认局）')
+  assert.ok(code.includes('archiveSession(madeId, { stopActivity: true })'), '答疑回收再补归档停活兜底')
+})
+
+test('修复3/5：去会话页的局回到官方左栏；显式收局不双份归档', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.ok(code.includes('simHideRelease(simRoundIds, simShownIds, sessionId)'), 'goChat 要把这一局移出隐藏集并记豁免')
+  assert.ok(code.includes('if (simHideExempt(simShownIds, id)) continue;'), '拼隐藏样式时豁免局要跳过')
+  assert.ok(code.includes('var skipRef = React.useRef(false)'), '要有显式收局豁免标记')
+  assert.ok(code.includes('if (takeSkipFlag(skipRef)) return;'), 'cleanup 消费豁免，不重复归档')
+  assert.equal((code.match(/skipRef\.current = true;/g) || []).length, 2, 'restartRound/backToForm 各置一次豁免')
+  assert.ok(code.includes('skipRef.current = false;'), '开局失败要作废豁免，退出时照常收')
+})
+
+test('修复6：工作台新建有 creating 闸，与另两个面板对齐', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  const start = code.indexOf('function WbPanel(')
+  const end = code.indexOf('function WbIcon(')
+  assert.ok(start > 0 && end > start, '找不到工作台这一段')
+  const panel = code.slice(start, end)
+  assert.ok(panel.includes('var creatingPair = useState(false)'), '要有 creating 状态')
+  assert.ok(panel.includes('if (creating) return;'), '建会话没回话前不许再点')
+  assert.ok(panel.includes('setCreating(true)'), '开建时上闸')
+  assert.equal((panel.match(/setCreating\(false\)/g) || []).length, 2, '成功/失败都要落闸')
+  assert.ok(panel.includes('disabled: creating'), '按钮要跟着禁用')
+})
+
+test('修复7：空值与同步抛错优雅降级', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.ok(code.includes("typeof form.getSnapshot === 'function' ? form.getSnapshot() : null"), '读快照前查空值')
+  assert.ok(code.includes("if (!form || typeof form.subscribe !== 'function') return undefined;"), '订阅前查空值')
+  const snapAt = code.indexOf('function useSnapshot(')
+  const snapSeg = code.slice(snapAt, code.indexOf('function noteNode('))
+  assert.ok(snapSeg.includes('try {') && snapSeg.includes('catch (error)'), 'useSnapshot 的读快照/订阅要包错')
+  const saveAt = code.indexOf('var save = function')
+  const saveSeg = code.slice(saveAt, code.indexOf('Promise.resolve(write)', saveAt))
+  assert.ok(saveSeg.includes('try {') && saveSeg.includes('catch (error)'), 'form.set/unset 的同步抛错要接住')
+  assert.ok(code.includes("if (!Ctx || !Ctx.uiWorkspace || typeof Ctx.uiWorkspace.unarchiveSession !== 'function')"), 'reviveArchived 要查空值')
+  assert.ok(code.includes("setArchMsg('会话服务不支持恢复')"), '缺服务时明说，不静默抛错')
+})
+
+test('修复4/8：style 统一打标按标记全摘；id 拼选择器前先校验', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.equal((code.match(/setAttribute\('data-plugin', NS\)/g) || []).length, 5, 'wb/sr/sim/te/hide 五处 style 都要打标')
+  assert.ok(code.includes('function removePluginStyles()'), '要有按标记摘样式的函数')
+  assert.ok(code.includes("document.querySelectorAll('style[data-plugin=\"' + NS + '\"]')"), '按标记找本插件全部 style')
+  assert.ok(code.includes('for (var rid in simRoundIds) { delete simRoundIds[rid]; }'), '卸载要原地清隐藏集合')
+  assert.ok(code.includes('if (!simIdSafe(id)) continue;'), '拼选择器前校验 id')
+  assert.ok(code.includes('var SIM_ID_SAFE = /^[A-Za-z0-9_-]+$/'), '校验规则写死为字母数字下划线连字符')
+})
+
+test('修复9：续讲顶部显示完整标题，列表仍用省略号', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  assert.equal(code.includes('slice(0, 14)'), false, '标题不再截 14 字')
+  assert.ok(code.includes("return '答疑·' + one;"), '会话名存完整问题')
+  assert.ok(code.includes('.te-quote{flex:1;min-width:0;opacity:.8;word-break:break-word;line-height:1.6}'), '顶部引题换行展示全文')
+  assert.ok(code.includes('.te-htitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'), '列表仍靠 CSS 省略号截断')
+  assert.ok(code.includes("replace(/^答疑·/, '')"), '续讲去掉前缀后展示全文')
+})
+
+test('修复10/12：认局局限与轮询决定如实写在注释里', () => {
+  const code = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+  // 宿主 ISessions.create 没有插件可写的元数据入口（已只读核对 E:\dsh），
+  // 保留标题前缀认局，局限必须写明，不假装用了元数据。
+  assert.equal((code.match(/没有插件可写的元数据/g) || []).length, 2, 'teScan 与 scan 两处都要说明局限')
+  assert.ok(code.includes('注册自定义投影要动宿主侧'), '说明为什么不用 projectionValues')
+  assert.equal((code.match(/官方会话页改名丢了前缀/g) || []).length, 2, '改名丢前缀的后果要写明')
+  assert.ok(code.includes('900ms 轮询保持不动'), '轮询本次不改，注释记一笔')
+  assert.equal((code.match(/渲染期错误由宿主条目边界兜底/g) || []).length, 2, '两处 try/catch 注释改为如实说明')
 })

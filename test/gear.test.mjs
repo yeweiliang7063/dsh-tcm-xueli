@@ -92,9 +92,11 @@ test('blotDosage：只遮「数字＋克/g」整截，药名留着（桂枝9克 
   assert.equal(hasDosage('这味药按克算'), false)
 })
 
-test('复述原文必须加引号：引号里的剂量不遮，引号外照遮', () => {
-  assert.equal(blotDosage('《伤寒论》原文：「桂枝9克，芍药6克」'), '《伤寒论》原文：「桂枝9克，芍药6克」')
-  assert.equal(blotDosage('引文「桂枝9克」，自己又说桂枝9克'), '引文「桂枝9克」，自己又说桂枝*')
+test('引文验真：引号里含现代克数就取消豁免照遮，不含克数的原文才放过', () => {
+  // 古籍原文用两、钱、枚，不用现代克数——引号里出现「数字＋克/g」几乎必非原文，照遮
+  assert.equal(blotDosage('《伤寒论》原文：「桂枝9克，芍药6克」'), '《伤寒论》原文：「桂枝*，芍药*」')
+  assert.equal(blotDosage('引文「桂枝9克」，自己又说桂枝9克'), '引文「桂枝*」，自己又说桂枝*')
+  // 不含现代克数的原文（三两）照样原样放过
   assert.equal(maskDosage('「桂枝三两」照抄，桂枝9克'), '「桂枝三两」照抄，桂枝*')
 })
 
@@ -105,15 +107,15 @@ test('blotDosage：列表项前缀永不参与打码', () => {
   assert.equal(blotDosage('1. **桂枝**：9g\n2. **白芍**：9g\n'), '1. **桂枝**：*\n2. **白芍**：*\n')
 })
 
-test('不加引号转述原单上的剂量也照遮，整段放进「」才放过', () => {
+test('转述原单上的剂量照遮：放进「」也验真，含现代克数一样遮', () => {
   const restated = '原单上黄芪 30g、当归 15g、白术 10g，三味都是补气健脾的路子。'
   assert.equal(blotDosage(restated), '原单上黄芪 *、当归 *、白术 *，三味都是补气健脾的路子。')
   assert.equal(hasDosage(restated), true)
   assert.equal(blotDosage('原单上黄芪 30 克，可以再加陈皮 6g。'), '原单上黄芪 *，可以再加陈皮 *。')
-  // 原单整段抄进引号里，才算照念原文
+  // 原单整段抄进引号里，但带现代克数——验真后豁免取消，照遮
   const quoted = '原单上「黄芪 30g、当归 15g、白术 10g」三味，都是补气健脾的路子。'
-  assert.equal(blotDosage(quoted), quoted)
-  assert.equal(hasDosage(quoted), false)
+  assert.equal(blotDosage(quoted), '原单上「黄芪 *、当归 *、白术 *」三味，都是补气健脾的路子。')
+  assert.equal(hasDosage(quoted), true)
 })
 
 test('引号是原文的唯一凭据：没引号、假引号、长引号都不放行', () => {
@@ -127,10 +129,10 @@ test('引号是原文的唯一凭据：没引号、假引号、长引号都不�
   // 超过 240 字的「引文」不是引文，是整段搬，里面剂量照遮
   const long = '「' + '甲'.repeat(260) + '桂枝9克」'
   assert.ok(blotDosage(long).endsWith('桂枝*」'), blotDosage(long).slice(-12))
-  // 正常的一句原文照样原样放过
-  assert.equal(blotDosage('《伤寒论》原文：「桂枝9克，芍药6克」'), '《伤寒论》原文：「桂枝9克，芍药6克」')
-  // 引文里的剂量原样，引文外的剂量照遮
-  assert.equal(blotDosage('原文「桂枝9克」，我的方子桂枝9克'), '原文「桂枝9克」，我的方子桂枝*')
+  // 含现代克数的「引文」验真后不再放行
+  assert.equal(blotDosage('《伤寒论》原文：「桂枝9克，芍药6克」'), '《伤寒论》原文：「桂枝*，芍药*」')
+  // 引文里的现代克数照遮，引文外的剂量也照遮
+  assert.equal(blotDosage('原文「桂枝9克」，我的方子桂枝9克'), '原文「桂枝*」，我的方子桂枝*')
 })
 
 test('剂量放行口子收紧：方名、整方、三位数、比例句里的克数都照遮', () => {
@@ -146,15 +148,15 @@ test('剂量放行口子收紧：方名、整方、三位数、比例句里的�
   assert.equal(blotDosage('桂枝９克'), '桂枝*')
 })
 
-test('blotDosage：整张方没加引号照遮，整段放进「」才放行', () => {
+test('blotDosage：整张方没加引号照遮，放进「」但带现代克数也照遮', () => {
   const formula = ['这是转述一张方子：', '', '1. **桂枝** 9g', '2. **白芍** 9g', '3. **生姜** 9g', '4. **甘草** 6g'].join('\n')
   const masked = ['这是转述一张方子：', '', '1. **桂枝** *', '2. **白芍** *', '3. **生姜** *', '4. **甘草** *'].join('\n')
-  // 口径：只有「」里的原文不遮；没加引号的整方，跟单味药一样照遮。
+  // 口径：没加引号的整方照遮；加了引号但带现代克数的，验真后也照遮。
   assert.equal(blotDosage(formula), masked)
   assert.equal(hasDosage(formula), true)
   const quoted = '这是转述一张方子：「桂枝 9g，白芍 9g，生姜 9g，甘草 6g」'
-  assert.equal(blotDosage(quoted), quoted)
-  assert.equal(hasDosage(quoted), false)
+  assert.equal(blotDosage(quoted), '这是转述一张方子：「桂枝 *，白芍 *，生姜 *，甘草 *」')
+  assert.equal(hasDosage(quoted), true)
   assert.equal(blotDosage('桂枝9g、白芍9g、生姜9g'), '桂枝*、白芍*、生姜*')
 })
 
@@ -186,6 +188,49 @@ test('括号包单位、约数写法也要遮，句末括弧不许被吃掉', ()
   assert.equal(blotDosage('（原文：桂枝9克）'), '（原文：桂枝*）')
   assert.equal(blotDosage('（按 1 比 1 配，桂枝9克，白芍9克）'), '（按 1 比 1 配，桂枝*，白芍*）')
   assert.equal(blotDosage('这味药按克算'), '这味药按克算')
+})
+
+test('范围剂量整截遮：下限也是剂量，不许只遮上限', () => {
+  assert.equal(blotDosage('桂枝3-9克'), '桂枝*')
+  assert.equal(blotDosage('桂枝3～9克'), '桂枝*')
+  assert.equal(blotDosage('桂枝3~9克'), '桂枝*')
+  assert.equal(blotDosage('桂枝3—9克'), '桂枝*')
+  assert.equal(blotDosage('三至九克'), '*')
+  assert.equal(blotDosage('桂枝3到9克，水煎服'), '桂枝*，水煎服')
+})
+
+test('英文与公制单位补齐：grams、kg、千克都认；体重公斤不误伤', () => {
+  assert.equal(blotDosage('桂枝9 grams'), '桂枝*')
+  assert.equal(blotDosage('桂枝9 gram'), '桂枝*')
+  assert.equal(blotDosage('桂枝3kg'), '桂枝*')
+  assert.equal(blotDosage('桂枝3千克'), '桂枝*')
+  assert.ok(hasDosage('桂枝3kg'))
+  // 体重/身高后的公斤是体重，不是给药量，原样保留
+  assert.equal(blotDosage('体重56公斤'), '体重56公斤')
+  assert.equal(hasDosage('身高 158cm，体重 56 公斤'), false)
+})
+
+test('全角半角混写小数也遮：３.5克、3．5克', () => {
+  assert.equal(blotDosage('桂枝３.5克'), '桂枝*')
+  assert.equal(blotDosage('桂枝3．5克'), '桂枝*')
+  assert.equal(blotDosage('桂枝３．５克'), '桂枝*')
+})
+
+test('高频漏网句式补遮：9克口服、9克分服、9克日二次', () => {
+  assert.equal(blotDosage('桂枝9克口服'), '桂枝*口服')
+  assert.equal(blotDosage('桂枝9克分服'), '桂枝*分服')
+  assert.equal(blotDosage('桂枝9克日二次'), '桂枝*日二次')
+  assert.ok(hasDosage('桂枝9克口服'))
+})
+
+test('误伤收紧：统一克数、一克都不许给不算给药量', () => {
+  assert.equal(blotDosage('统一克数'), '统一克数')
+  assert.equal(hasDosage('统一克数'), false)
+  assert.equal(blotDosage('一克都不许给'), '一克都不许给')
+  assert.equal(hasDosage('一克都不许给'), false)
+  // 但「还差9克」「剩余9克」是真剂量，照遮（差/余不再当豁免前缀）
+  assert.equal(blotDosage('还差9克'), '还差*')
+  assert.equal(blotDosage('剩余9克'), '剩余*')
 })
 
 test('流式切点：切在引号中间就前移，不把引文劈成两半', () => {

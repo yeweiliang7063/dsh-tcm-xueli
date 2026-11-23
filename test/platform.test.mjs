@@ -42,10 +42,14 @@ test('expandHome：~、~/、~\\ 按平台展开', () => {
   assert.equal(expandHome('/absolute/书', mac), '/absolute/书')
 })
 
-test('normalizeRoot：去掉末尾分隔符，根目录保留', () => {
+test('normalizeRoot：去掉末尾分隔符，盘符根拒绝', () => {
   assert.equal(normalizeRoot('C:\\中医知识库\\', win), 'C:\\中医知识库')
   assert.equal(normalizeRoot('C:\\中医知识库\\\\', win), 'C:\\中医知识库')
-  assert.equal(normalizeRoot('C:\\', win), 'C:\\')
+  // 盘符根会让整盘成库，按没填好处理。
+  assert.equal(normalizeRoot('C:\\', win), '')
+  assert.equal(normalizeRoot('D:/', win), '')
+  assert.equal(normalizeRoot('d:\\', win), '')
+  assert.equal(normalizeRoot('E:\\', win), '')
   assert.equal(normalizeRoot('/home/zhangsan/中医知识库/', linux), '/home/zhangsan/中医知识库')
   assert.equal(normalizeRoot('/', linux), '/')
 })

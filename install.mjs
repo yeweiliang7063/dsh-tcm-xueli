@@ -97,6 +97,7 @@ function linkSource(profile) {
     exists = false
   }
 
+  let bak = null
   if (exists) {
     let current = null
     try {
@@ -108,7 +109,7 @@ function linkSource(profile) {
       mark.ok(`链接已存在且指向本源：${link}`)
       return
     }
-    const bak = `${link}.bak-${stamp()}`
+    bak = `${link}.bak-${stamp()}`
     if (!DRY) fs.renameSync(link, bak)
     mark.warn(`原位置被别的插件占着（多半是 npm 上的同名旧包），已改名备份：${path.basename(bak)}`)
   }
@@ -119,7 +120,15 @@ function linkSource(profile) {
   }
   fs.mkdirSync(path.dirname(link), { recursive: true })
   // Windows 用 junction，不需要管理员权限；macOS / Linux 用目录软链接。
-  fs.symlinkSync(HERE, link, process.platform === 'win32' ? 'junction' : 'dir')
+  try {
+    fs.symlinkSync(HERE, link, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (e) {
+    // 建链接失败：把刚才改名备份的原位置还原回去，不能让用户原来的插件凭空消失。
+    if (bak) {
+      try { fs.renameSync(bak, link) } catch { /* 还原也失败就保留备份，下面报错里指明 */ }
+    }
+    die(`创建链接失败：${e.message}`, bak ? `原位置已尝试还原；若仍异常，备份在 ${path.basename(bak)}` : '请检查目录权限后重试。')
+  }
   mark.ok(`已创建链接 ${link} → ${HERE}`)
 }
 
@@ -148,7 +157,13 @@ function patchProfile(profile) {
   }
   const bak = `${file}.bak-tcm-install-${stamp()}`
   fs.copyFileSync(file, bak)
-  writeJson(file, pkg)
+  try {
+    writeJson(file, pkg)
+  } catch (e) {
+    // 写坏了就用备份还原，不能让 profile 的 package.json 变成半截 JSON。
+    try { fs.copyFileSync(bak, file) } catch { /* 还原失败保留备份 */ }
+    die(`更新 profile 失败：${e.message}`, `已尝试用备份还原；备份在 ${path.basename(bak)}`)
+  }
   mark.ok(`profile 已更新（备份：${path.basename(bak)}）`)
 }
 

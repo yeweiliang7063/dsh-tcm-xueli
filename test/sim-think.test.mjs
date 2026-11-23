@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createSimThinker, panelOpen } from '../lib/sim-think.js'
+import { createSimThinker, panelOpen, wantsHandIn, mountSimEndRoute } from '../lib/sim-think.js'
 
 /** 一个假的 agent：记着当前选择，select 时照着改。 */
 function fakeAgent(provider, model, effort) {
@@ -166,7 +166,7 @@ test('闭嘴只认「答卷」两个字：开局与问话都不闭嘴，写了�
   assert.equal(quietOf('sim-q'), false, '通知也不闭嘴')
 })
 
-test('医生打「答卷」才开始闭嘴，一直到「交卷」', () => {
+test('医生打「答卷」才开始闭嘴；再提问安全解锁，交卷收尾', () => {
   const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
   const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium'])
   const { thinker, quietOf } = createSimThinker(ctx, { versionOf: () => 'xueli' })
@@ -180,7 +180,9 @@ test('医生打「答卷」才开始闭嘴，一直到「交卷」', () => {
   say('答卷：口干口苦，脉弦，少阳证，治法和解少阳，主方小柴胡汤。')
   assert.equal(quietOf('sim-ask'), true, '看到「答卷」两个字就闭嘴')
   say('那要是只和解不换方呢？')
-  assert.equal(quietOf('sim-ask'), true, '交卷之前一直闭嘴，问话也闭嘴')
+  assert.equal(quietOf('sim-ask'), false, '安全解锁：闭麦后医生再提问必须放开，否则整局卡死只有交卷能解')
+  say('答卷补充：仍主小柴胡汤。')
+  assert.equal(quietOf('sim-ask'), true, '再答一轮又闭嘴')
   say('交卷')
   assert.equal(quietOf('sim-ask'), false, '交卷放开')
 })
@@ -196,7 +198,7 @@ test('诊室面板代发的开局：只许派病人，正文闭嘴', () => {
   assert.equal(quietOf('sim-source'), false, '医生真问了，就放开')
 })
 
-test('开局那句话不看预设也认，只要有「交卷」两个字就算交卷', async () => {
+test('开局那句话不看预设也认；「交卷」要整句恰好才算，句中提到不算', async () => {
   const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
   const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium'])
   const { thinker, quietOf } = createSimThinker(ctx, { versionOf: () => '' })
@@ -207,7 +209,9 @@ test('开局那句话不看预设也认，只要有「交卷」两个字就算�
   await tick()
   assert.equal(agent.model.current().reasoningEffort, 'off', '预设还没挂上也要关思考')
   thinker(session, open('这一局我看完了，交卷吧。'))
-  assert.equal(agent.model.current().reasoningEffort, 'medium', '只要带着交卷两个字就还原')
+  assert.equal(agent.model.current().reasoningEffort, 'off', '句中提到「交卷」不算交卷，思考保持关')
+  thinker(session, open('交卷'))
+  assert.equal(agent.model.current().reasoningEffort, 'medium', '整句恰好是「交卷」才还原')
 })
 
 test('开局之后第一句就是「交卷」也认：当场开到 High，这一局收尾', async () => {
@@ -280,35 +284,53 @@ test('拿到的 agent 不属于这一局（全量版/普通聊天的）就不碰
   assert.equal(quietOf('sim-scope'), true, '闭嘴只认这一局，照旧')
 })
 
-test('打赏只在评完那一刻认领：问诊、开局、别的局都不摆', async () => {
+test('打赏全链路：局号≠会话号，满十局按会话号标记，评完那一刻才认领', async () => {
+  const { createStore } = await import('../lib/clinic.js')
+  const store = createStore()
   const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
-  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium'])
-  let due = false
-  const { thinker, giftDue } = createSimThinker(ctx, { versionOf: () => 'xueli', giftOf: () => due })
-  const session = { id: 's-gift' }
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const { thinker, giftDue } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    // 与 sim.js 的真实接线一致：giftOf 只问布尔（hasGift），认领在出口层 takeGift。
+    giftOf: (sessionId) => store.hasGift(sessionId),
+  })
   const finish = { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } }
 
-  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20260101-9'))
+  // 前九局：局号（round-N）与会话号（session-doctor-N）是两回事
+  const doctor = { id: 'session-doctor-9' }
+  for (let i = 1; i <= 9; i += 1) {
+    await store.begin({ id: 'round-' + i, level: '普通', direction: '方药', doctorId: doctor.id })
+    await store.end({ id: 'round-' + i, verdict: '过关', doctorId: doctor.id })
+  }
+  thinker(doctor, open('【模拟问诊 · 开局】普通｜方药｜20260101-9'))
   await tick()
-  assert.equal(giftDue('s-gift'), false, '开局不摆')
-
-  thinker(session, open('请问您头胀多久了？'))
-  thinker(session, open('交卷'))
+  assert.equal(giftDue(doctor.id), false, '开局不摆')
+  thinker(doctor, open('请问您头胀多久了？'))
+  thinker(doctor, open('交卷'))
   await tick()
-  assert.equal(giftDue('s-gift'), false, '交卷那一份（点评还没记完）不摆')
+  assert.equal(giftDue(doctor.id), false, '交卷那一份（点评还没记完）不摆')
+  thinker(doctor, finish)
+  assert.equal(giftDue(doctor.id), false, '不满十局，评完也不摆')
+  assert.equal(store.takeGift(doctor.id), null, '不满十局没得领')
 
-  due = true
-  thinker(session, finish)
-  assert.equal(giftDue('s-gift'), true, '评完那一刻认领到')
-  assert.equal(giftDue('s-gift'), false, '同一轮只认领一次')
-  assert.equal(giftDue('s-other'), false, '别的会话不沾')
-
-  // 不满十局：giftOf 不给，认领不到
-  due = false
-  thinker(session, open('交卷'))
+  // 第十局（面板另开的新会话）：判完就把这一会话标记为待摆
+  const doctor10 = { id: 'session-doctor-10' }
+  await store.begin({ id: 'round-10', level: '普通', direction: '方药', doctorId: doctor10.id })
+  await store.end({ id: 'round-10', verdict: '过关', doctorId: doctor10.id })
+  assert.equal(store.hasGift('round-10'), false, '标记的是会话号，不是局号')
+  assert.equal(store.hasGift(doctor10.id), true, '满十局：按会话号标记')
+  thinker(doctor10, open('【模拟问诊 · 开局】普通｜方药｜20260101-10'))
   await tick()
-  thinker(session, finish)
-  assert.equal(giftDue('s-gift'), false, '不满十局就不摆')
+  thinker(doctor10, open('请问您口苦吗？'))
+  thinker(doctor10, open('交卷'))
+  await tick()
+  thinker(doctor10, finish)
+  assert.equal(giftDue(doctor10.id), true, '评完那一刻按会话号认领到')
+  assert.equal(giftDue(doctor10.id), false, '同一轮只认领一次')
+  assert.equal(giftDue('round-10'), false, '拿局号来问一律没有')
+  assert.equal(giftDue(doctor.id), false, '别的会话不沾')
+  assert.deepEqual(store.takeGift(doctor10.id), { rounds: 10 }, '出口层按会话号领到计数')
+  assert.equal(store.takeGift(doctor10.id), null, '领完就清')
 })
 
 test('panelOpen 只认面板格式：三段齐全才算', () => {
@@ -527,4 +549,163 @@ test('面板开的局：认领之后一直认得出，弃局归档了也认得�
   assert.equal(isPanelRound('s-other'), false, '别的会话一概不认')
   assert.equal(isPanelRound(''), false)
   assert.equal(isPanelRound(undefined), false)
+})
+
+/* ── 交卷认法：整句精确匹配 ── */
+
+test('wantsHandIn 整句精确：恰好「交卷」（可带少量标点）才认，句中提到不算', () => {
+  assert.equal(wantsHandIn('交卷'), true)
+  assert.equal(wantsHandIn('交卷。'), true)
+  assert.equal(wantsHandIn('  交卷！  '), true)
+  assert.equal(wantsHandIn('交卷？'), true)
+  assert.equal(wantsHandIn('交卷，'), true)
+  assert.equal(wantsHandIn('这一局我看完了，交卷吧。'), false, '句中提到不算')
+  assert.equal(wantsHandIn('等会儿交卷'), false)
+  assert.equal(wantsHandIn('交卷前再问一句'), false)
+  assert.equal(wantsHandIn('答卷'), false)
+  assert.equal(wantsHandIn(''), false)
+  assert.equal(wantsHandIn(undefined), false)
+})
+
+/* ── tool/result 认交卷：结构化字段优先，read/grep 结果不得误触发 ── */
+
+test('tool/result 按 callId 配对 tool/call 认工具：read 读回含该词的源码不算交卷', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const archived = []
+  const { thinker, giftDue } = createSimThinker(ctx, {
+    versionOf: () => 'xueli',
+    archiveOf: (id) => archived.push(id),
+    giftOf: () => true,
+  })
+  const session = { id: 's-toolname' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261123-1'))
+  await tick()
+  thinker(session, open('交卷'))
+  await tick()
+  assert.equal(agent.model.current().reasoningEffort, 'high', '交卷后点评要 High')
+
+  // read 工具读回了含「xueli_finish_round」的源码/日志：结构化名字是 read，绝不判交卷
+  thinker(session, { type: 'tool/call', data: { turn: 2, step: 1, callId: 'call-read-1', name: 'read', arguments: { file_path: 'lib/clinic.js' } } })
+  thinker(session, {
+    type: 'tool/result',
+    data: {
+      turn: 2, step: 1,
+      message: { id: 'm1', role: 'tool', toolCallId: 'call-read-1', source: { kind: 'tool', callId: 'call-read-1' }, content: [{ type: 'text', text: '源码里写着 xueli_finish_round 这个工具名' }] },
+    },
+  })
+  assert.equal(agent.model.current().reasoningEffort, 'high', 'read 结果不算交卷，档位不动')
+  assert.equal(giftDue('s-toolname'), false, 'read 结果不摆打赏')
+  assert.deepEqual(archived, [], 'read 结果不收局')
+
+  // 真正的 xueli_finish_round：callId 配对上名字，判交卷
+  thinker(session, { type: 'tool/call', data: { turn: 2, step: 2, callId: 'call-finish-1', name: 'xueli_finish_round', arguments: { id: 'r-1', verdict: '过关' } } })
+  thinker(session, {
+    type: 'tool/result',
+    data: {
+      turn: 2, step: 2,
+      message: { id: 'm2', role: 'tool', toolCallId: 'call-finish-1', source: { kind: 'tool', callId: 'call-finish-1' }, content: [{ type: 'text', text: '这一局的成绩已记下。' }] },
+    },
+  })
+  assert.equal(giftDue('s-toolname'), true, '配对上名字才认领打赏')
+  thinker(session, { type: 'turn/end', data: { turn: 2, reason: 'complete' } })
+  assert.deepEqual(archived, ['s-toolname'], '真正的交卷结果才收局')
+})
+
+test('tool/result 结构化全缺才退回文本：剔掉正文后只认名字字段，read 正文不误触发', async () => {
+  const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+  const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium', 'high'])
+  const { thinker, giftDue } = createSimThinker(ctx, { versionOf: () => 'xueli', giftOf: () => true })
+  const session = { id: 's-fallback' }
+
+  thinker(session, open('【模拟问诊 · 开局】普通｜方药｜20261123-2'))
+  await tick()
+  thinker(session, open('交卷'))
+  await tick()
+
+  // 没有 callId 配对、没有名字字段，正文里提到该词：不算（正文被剔掉）
+  thinker(session, {
+    type: 'tool/result',
+    data: { turn: 2, step: 1, message: { id: 'm1', role: 'tool', content: [{ type: 'text', text: '日志里出现 xueli_finish_round' }] } },
+  })
+  assert.equal(giftDue('s-fallback'), false, '正文里提到不算')
+
+  // 名字字段在（简化形态）：算
+  thinker(session, { type: 'tool/result', data: { name: 'xueli_finish_round', ok: true } })
+  assert.equal(giftDue('s-fallback'), true, '名字字段明确才算')
+})
+
+/* ── 闭麦回合打标：助手正文不进医生可读的归档 ── */
+
+test('闭麦轮助手正文不进归档：thinker 打标，recordSession 跳过；问句轮照常归档', async () => {
+  const { recordSession, clearMutedTurns } = await import('../lib/records.js')
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-mute-'))
+  try {
+    const agent = fakeAgent('deepseek', 'deepseek-v4', 'medium')
+    const ctx = fakeCtx(agent, ['off', 'minimal', 'low', 'medium'])
+    const { thinker } = createSimThinker(ctx, { versionOf: () => 'xueli' })
+    const session = { id: 'sim-mute-archive' }
+    const userEvent = (text) => ({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
+    const assistantEvent = (text, turn) => ({ type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text }] } } })
+
+    // 开局这一轮闭麦：助手正文（底牌推理）不许进归档
+    thinker(session, { type: 'turn/start', data: { turn: 1 } })
+    thinker(session, userEvent('【模拟问诊 · 开局】普通｜方药｜20261123-3'))
+    const events = [
+      userEvent('【模拟问诊 · 开局】普通｜方药｜20261123-3'),
+      assistantEvent('底牌推理：本局锚点是少阳，病机是胆胃不和……', 1),
+    ]
+    const file = recordSession({ kb, sessionId: session.id, preset: 'dsh-tcm-xueli', title: '问诊·局 3', events })
+    assert.ok(file, '归档要写出来')
+    const written = fs.readFileSync(file, 'utf8')
+    assert.ok(!written.includes('底牌推理'), '闭麦轮的助手正文不许进归档')
+    assert.ok(written.includes('【模拟问诊 · 开局】'), '医生自己的话照常归档')
+
+    // 问句这一轮放开：助手转述照常进归档
+    thinker(session, { type: 'turn/start', data: { turn: 2 } })
+    thinker(session, userEvent('请问您口苦吗？'))
+    events.push(userEvent('请问您口苦吗？'))
+    events.push(assistantEvent('病人说：口苦，咽干。', 2))
+    const file2 = recordSession({ kb, sessionId: session.id, preset: 'dsh-tcm-xueli', title: '问诊·局 3', events, previousFile: file })
+    assert.ok(file2)
+    const written2 = fs.readFileSync(file2, 'utf8')
+    assert.ok(written2.includes('病人说：口苦，咽干。'), '放开轮的助手正文照常归档')
+    assert.ok(!written2.includes('底牌推理'), '重写归档仍跳过闭麦轮')
+    clearMutedTurns(session.id)
+  } finally {
+    fs.rmSync(kb, { recursive: true, force: true })
+  }
+})
+
+/* ── 弃局通道的本机 CSRF 闸 ── */
+
+test('弃局通道只认本机页面：evil Origin/Referer 拒，GUI Referer 过，双缺过，远程拒', async () => {
+  let handler = null
+  const ctx = {
+    get: (name) => (name === 'webServer' ? { register: (route) => { handler = route.handler; return () => {} } } : undefined),
+    logger: { info() {}, warn() {} },
+  }
+  const released = []
+  const purged = []
+  await mountSimEndRoute(ctx, { release: (id) => released.push(id), purge: (id) => purged.push(id) })
+  assert.ok(handler, '通道要挂上')
+  const call = (headers, remote = '127.0.0.1') => {
+    let code = 0
+    const res = { writeHead: (c) => { code = c }, end: () => {} }
+    handler({ method: 'GET', url: '/dsh-tcm-xueli/sim-end?purge=1&session=s-x', headers, socket: { remoteAddress: remote } }, res)
+    return code
+  }
+  assert.equal(call({ host: '127.0.0.1:57443', origin: 'http://evil.example' }), 403, 'evil Origin 拒')
+  assert.equal(call({ host: '127.0.0.1:57443', referer: 'http://evil.example/x' }), 403, 'evil Referer 拒')
+  assert.equal(call({ host: '127.0.0.1:57443', origin: 'null' }), 403, '沙箱页 null Origin 拒')
+  assert.equal(call({ host: '127.0.0.1:57443', referer: 'http://127.0.0.1:57443/' }), 200, 'GUI 本站 Referer 过')
+  assert.equal(call({ host: '127.0.0.1:57443', origin: 'http://localhost:57443' }), 200, 'GUI 本站 Origin 过')
+  assert.equal(call({ host: '127.0.0.1:57443' }), 200, '双缺放行')
+  assert.equal(call({ host: '127.0.0.1:57443' }, '192.168.1.5'), 403, '远程拒')
+  assert.equal(released.length, 3, '只有放行的请求才真弃局')
+  assert.equal(purged.length, 3, '只有放行的请求才真删')
 })

@@ -152,6 +152,7 @@ try {
   chk('lib/client.js 语法可解析', false, e.message);
 }
 const clientJs = fs.readFileSync(path.join(PLUGIN, 'lib', 'client.js'), 'utf8');
+const teachSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'teach.js'), 'utf8');
 for (const m of [`id: '${pkg.name}'`, "var NS = 'dsh-tcm-xueli'", "form.set('kbPath'", '学理模式', "var SIM_PANEL = 'xueli-sim'", "label: function () { return '模拟问诊'; }", "var SIM_CHAT_SLOT = 'xueli.sim.chat'", "var TE_PANEL = 'xueli-teach'", "label: function () { return '讲解答疑'; }", "var TE_CHAT_SLOT = 'xueli.teach.chat'"])
   chk(`lib/client.js 含「${m}」`, clientJs.includes(m));
 chk('lib/client.js 不再有挡位按钮', !clientJs.includes("form.set('level'"));
@@ -161,7 +162,7 @@ chk('模拟问诊诊室回到官方聊天窗（3.2.12 的自绘简版面已撤�
 chk('诊室用官方聊天窗，等病人时由宿主自己显示进度', clientJs.includes('E(WbChatPane, {') && clientJs.includes('chatSlot: SIM_CHAT_SLOT'));
 const clinicJs = fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8');
 chk('锚点改由工具返回、不再拼进开局消息', clinicJs.includes('xueli_draw_anchor') && clinicJs.includes('ANCHOR_LIUJING') && !clientJs.includes('simAnchorLine') && !clientJs.includes('【不许重复】') && !clientJs.includes('本局随机锚点'), '锚点进开局消息就是剧透');
-chk('开局指令只带难度方向局号，锚点在工具结果里', clientJs.includes("'【模拟问诊 · 开局】' + lv + '｜' + td + '｜' + rid") && clientJs.includes("simRoundIds[id] = true"));
+chk('开局指令只带难度方向局号，锚点在工具结果里', clientJs.includes("'【模拟问诊 · 开局】' + lv + '｜' + td + '｜' + rid") && clientJs.includes("simHideAdd(simRoundIds, id)"));
 chk('锚点最近八局不重复', clinicJs.includes('ANCHOR_MEMORY = 8') && clinicJs.includes('anchorHistory'));
 chk('锚点两个病机不重复', clinicJs.includes('one !== a') && clinicJs.includes('pickBingjiPair'));
 chk('诊室不再自己解析正文（交回宿主渲染）', !clientJs.includes('quietText(') && !clientJs.includes('finalNode.blocks'));
@@ -194,7 +195,7 @@ chk('答疑覆盖随包经典各部，辨证按题目所属走', presetPrefix.in
 // 「末尾两行声明照写，一处都不许省。」之间）。改插件别的部分不许顺手碰它；
 // 真要改，改完必须把下面两行指纹一起更新，否则这里报红——这就是「单独代码保护」。
 const TEACH_LOCK = {
-  client: '394b86db8a91b2a288c257a6de3e3830912f286f67ab836f0796521d11fc2d6d',
+  client: '728b276e78444152fa350ff6fe801acdfcef2e627b3df4e335bf2b62a5d55125',
   prompt: '2fe7a7969dac4ea7931a92ba7c10ca870de9fad1c35ef5fb92dd1efa821fc435',
 };
 function teachClientText() {
@@ -239,7 +240,10 @@ chk('随库缺字已补回：项背强几几、目䀮䀮', (() => {
   const sw = fs.readFileSync(path.join(dir, '01-黄帝内经素问.md'), 'utf8');
   return sh.includes('项背强几几') && sw.includes('目䀮䀮');
 })());
-chk('客户端：答疑面板不归档不删局', (() => { const start = clientJs.indexOf('function TeaPanel('); const end = clientJs.indexOf('function TeIcon('); if (start < 0 || end <= start) return false; const panel = clientJs.slice(start, end); return !panel.includes('archiveSession') && !panel.includes('purge=1'); })());
+chk('客户端：答疑历史能改名、归档、删除，删除只走自己的通道', (() => { const start = clientJs.indexOf('function TeaPanel('); const end = clientJs.indexOf('function TeIcon('); if (start < 0 || end <= start) return false; const panel = clientJs.slice(start, end); return panel.includes('doTitle') && panel.includes('archiveSession') && panel.includes('teach-end?doing=delete') && !panel.includes('purge=1'); })());
+chk('客户端：工作台历史也能删局，走同一条通道', (() => { const start = clientJs.indexOf('function WbPanel('); const end = clientJs.indexOf('function WbIcon('); if (start < 0 || end <= start) return false; const panel = clientJs.slice(start, end); return panel.includes('var doDelete = function') && panel.includes('teach-end?doing=delete') && panel.includes("kind: 'delete'") && !panel.includes('purge=1'); })());
+chk('删局通道只认本插件预设，学习版面板的局也能删', teachSrc.includes('export function isOwnSession') && teachSrc.includes('export async function ownsSession') && teachSrc.includes('isOwnSession(id, home)'));
+chk('正在用的这一局缓存还没落盘时，改问宿主认人', teachSrc.includes("ctx.get('sessionQuery')") && teachSrc.includes('observeSession') && teachSrc.includes('agentPreset') && teachSrc.includes('ownsSession(ctx, id)'));
 chk('预设提示词写明开局指令格式', presetPrefix.includes('【模拟问诊 · 开局】'));
 chk('预设提示词让裁判记局（xueli_begin_round / xueli_finish_round）', presetPrefix.includes('xueli_begin_round') && presetPrefix.includes('xueli_finish_round'));
 chk('提示词：锚点只从工具结果拿、不对医生露', presetPrefix.includes('本局锚点只从 xueli_draw_anchor 的工具结果里拿') && presetPrefix.includes('一个字都不许出现在给医生看的任何文字里'));
@@ -251,7 +255,7 @@ chk('每局现抽病机、不许和最近几局撞车', presetPrefix.includes('�
 chk('转话时心里的方名条文不许写进面板', presetPrefix.includes('一个字都不许写进面板'));
 chk('答题期间模型不许自己发旁白', presetPrefix.includes('答题期间你不许自己发话') && presetPrefix.includes('不许写「病人已经把袖子挽好了'));
 chk('提示词也只认「交卷」两个字', presetPrefix.includes('只有医生明确说「交卷」') && presetPrefix.includes('③是「交卷」——才切裁判'));
-chk('开局要「模拟问诊…开局」，光提这几个字不算；交卷只看两个字', (() => { const f = fs.readFileSync('lib/sim-think.js', 'utf8'); return f.includes('const OPEN_MARK = /^') && f.includes('开局/u') && f.includes('【?\\s*模拟问诊\\s*[·・\\-—|]?\\s*开局') && f.includes("return String(said || '').includes(HAND_IN)") })());
+chk('开局要「模拟问诊…开局」，光提这几个字不算；交卷只看两个字', (() => { const f = fs.readFileSync('lib/sim-think.js', 'utf8'); return f.includes('const OPEN_MARK = /^') && f.includes('开局/u') && f.includes('【?\\s*模拟问诊\\s*[·・\\-—|]?\\s*开局') && f.includes("const HAND_IN_LINE = new RegExp('^' + HAND_IN") && f.includes('return HAND_IN_LINE.test(String(said') })());
 chk('答题期间病人和裁判都不许插话', presetPrefix.includes('【答题期间病人和裁判都不许插话】') && presetPrefix.includes('是在答题（陈述症状、讲病机、写治法方药、取穴、整段分析）') && presetPrefix.includes('病人不许自己开口，裁判不许提前点评'));
 chk('闭嘴只认「答卷」两个字', (() => {
   const code = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8')
@@ -259,11 +263,11 @@ chk('闭嘴只认「答卷」两个字', (() => {
     && !code.includes('looksQuestion') && !code.includes('INJECTED_SOURCE') && !code.includes('nextLatch')
 })())
 chk('只有医生打「交卷」才切点评，且第一句就交卷也认', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); const src = fs.readFileSync(path.join(PLUGIN, 'test', 'sim-think.test.mjs'), 'utf8'); return think.includes('function wantsHandIn(said)') && think.includes('if (wantsHandIn(said))') && !think.includes('isQuestion') && src.includes('开局之后第一句就是「交卷」也认'); })());
-chk('点评打完把档位交回去（judging + settleBack）', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('const judging = new Map()') && think.includes('const settleBack = (sessionId, previous)') && think.includes("includes('xueli_finish_round')"); })());
+chk('点评打完把档位交回去（judging + settleBack）', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8'); return think.includes('const judging = new Map()') && think.includes('const settleBack = (sessionId, previous)') && think.includes('const isFinishResult = (sessionId, data)') && think.includes("name === 'xueli_finish_round'"); })());
 chk('医案入库前先遮克数（题面/方名/一句话原因）', (() => { const clinic = fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8'); return clinic.includes('caseSummary: blotDosage(textOf(args.case_summary))') && clinic.includes('failLine: blotDosage(textOf(args.fail_line))') && clinic.includes('prescribe: blotDosage(textOf(args.prescribe))'); })());
 chk('调档只管模拟问诊这一局，普通聊天不碰', (() => { const think = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim-think.js'), 'utf8');
-chk('抽过的锚点跨重启记得住（写进资料库医案目录）', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return rec.includes('export function readSeenAnchors') && rec.includes('export function appendSeenAnchor') && idx.includes('loadSeen: () => readSeenAnchors(currentPath(config))') && idx.includes('saveSeen:'); })());
-chk('最近几局也落一份，重启后翻得到', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return rec.includes('export function readRecentRounds') && rec.includes('export function saveRecentRound') && idx.includes('loadRounds: () => readRecentRounds(currentPath(config))'); })()); return think.includes('if (!simSessions.has(sessionId)) return') && think.includes('simSessions.delete(sessionId)'); })());
+chk('抽过的锚点跨重启记得住（写进插件私有目录，医生读不到）', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return rec.includes('export function readSeenAnchors') && rec.includes('export function appendSeenAnchor') && rec.includes("ANCHOR_PRIVATE_FILE = 'anchors.jsonl'") && idx.includes('loadSeen: () => readSeenAnchors(currentPath(config), ctx.logger)') && idx.includes('saveSeen:'); })());
+chk('最近几局也落一份，重启后翻得到', (() => { const rec = fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8'); const idx = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8'); return rec.includes('export function readRecentRounds') && rec.includes('export function saveRecentRound') && idx.includes('loadRounds: () => readRecentRounds(currentPath(config), ctx.logger)') && rec.includes('anchor: anchorDigest(row.anchor)'); })()); return think.includes('if (!simSessions.has(sessionId)) return') && think.includes('simSessions.delete(sessionId)'); })());
 chk('预设说明写明仅供学习研究', String(cfg.description).includes('仅供学习研究'));
 const rawPrefix = ((cfg.plugins || []).find((x) => x.id === 'persona') || {}).config?.prefix || '';
 chk('persona 提示词以常驻口径变量开头', rawPrefix.trimStart().startsWith('{{tcm_gear_guard}}'));
@@ -318,12 +322,17 @@ chk('六经与时令必须排在最前', prefix.includes('21.5 问诊齐了之�
 const dashangSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'dashang.js'), 'utf8');
 const indexSrc = fs.readFileSync(path.join(PLUGIN, 'lib', 'sim.js'), 'utf8');
 chk('打赏区由插件代码追加', dashangSrc.includes('export function dashangBlock') && indexSrc.includes('dashangGiftText') && indexSrc.includes("chunk.type === 'finish'"));
-chk('打赏只在模拟问诊满十局时摆：点评末尾、由病例卡计数认领', dashangSrc.includes('export function dashangBlock(webServer, rounds)') && indexSrc.includes('dashangGiftText(giftRounds, ctx)') && indexSrc.includes('clinicStore.takeGift(sessionId)') && indexSrc.includes('giftOf: () => gifted.due') && fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8').includes('GIFT_EVERY = 10') && fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8').includes('export function saveRoundProgress'));
-chk('打赏网址带实时端口', dashangSrc.includes('listenedPort') && dashangSrc.includes('config?.port') && !/127\.0\.0\.1:\d{4,5}\/dsh-tcm-xueli/.test(dashangSrc));
-chk('打赏块含两张码与自愿说明', dashangSrc.includes('![支付宝打赏码]') && dashangSrc.includes('![微信打赏码]') && dashangSrc.includes('打赏全凭自愿'));
-chk('提示词里不含打赏与收款码', !prefix.includes('打赏') && !prefix.includes('alipay.jpg') && !prefix.includes('![支付宝打赏码]') && !prefix.includes('请作者喝杯茶'));
+chk('打赏只在模拟问诊满十局时摆：点评末尾、由病例卡计数认领', dashangSrc.includes('export function dashangBlock(rounds)') && indexSrc.includes('dashangGiftText(giftRounds)') && indexSrc.includes('clinicStore.takeGift(sessionId)') && indexSrc.includes('giftOf: (sessionId) =>') && indexSrc.includes('clinicStore.hasGift(sessionId)') && fs.readFileSync(path.join(PLUGIN, 'lib', 'clinic.js'), 'utf8').includes('GIFT_EVERY = 10') && fs.readFileSync(path.join(PLUGIN, 'lib', 'records.js'), 'utf8').includes('export function saveRoundProgress'));
+chk('打赏图按插件安装位置算绝对路径，不写死也不拼端口', dashangSrc.includes('path.resolve(DASHANG_DIR, name)') && dashangSrc.includes('fileURLToPath(import.meta.url)') && !dashangSrc.includes('listenedPort') && !/127\.0\.0\.1:\d{4,5}\/dsh-tcm-xueli/.test(dashangSrc));
+chk('打赏块原文照旧：一张拼好的码、标题、自愿说明', dashangSrc.includes('DASHANG_QR') && dashangSrc.includes('dashang-qr.png') && dashangSrc.includes('打赏全凭自愿') && dashangSrc.includes('DASHANG_TIP'));
+chk('学习版给了说法的回答也补打赏区：只看末尾那两句声明，一局只摆一次', dashangSrc.includes('export function hasGiftSign') && dashangSrc.includes('本节仅供学习研究') && xuexiSrc.includes('hasGiftSign(seen)') && xuexiSrc.includes('giftOnce.has(key)') && xuexiSrc.includes("chunk.text.includes('dashang-qr.png')") && xuexiSrc.includes('hint && hint.clinic') && indexSrc.includes('clinic.of = isPanelRound') && indexSrc.includes('hint.clinic ='));
+chk('收尾块排在末尾两行声明之后', xuexiSrc.includes("if (chunk.type === 'finish') yield* sendTail()") && !xuexiSrc.includes('DASHANG_BEFORE_SIGN'));
+chk('那两句免责声明由代码兜底：缺哪行补哪行，一行都不许少', dashangSrc.includes('export const DISCLAIMER') && dashangSrc.includes('export function missingDisclaimer') && dashangSrc.includes('不构成诊疗建议') && dashangSrc.includes('请自行核对原书后再用') && xuexiSrc.includes('missingDisclaimer(tailText)') && xuexiSrc.includes('lack.join') && !xuexiSrc.includes('giftSent'));
+chk('闭麦轮与非中医会话一个字都不添', xuexiSrc.includes('hint && hint.muted') && xuexiSrc.includes('if (!isTcmNow) return'))
+chk('只调工具、没写完的那一轮不收尾：免得一局贴好几遍声明', xuexiSrc.includes('let sawTool = false') && xuexiSrc.includes("chunk.type === 'tool-call') sawTool = true") && xuexiSrc.includes('if (sawTool) return') && xuexiSrc.includes("if (tailText.trim() === '') return"))
+chk('提示词里不含打赏与收款码', !prefix.includes('打赏') && !prefix.includes('alipay.jpg') && !prefix.includes('dashang-qr.png') && !prefix.includes('请作者喝杯茶'));
 chk('打赏去重同时看开头和结尾', indexSrc.includes('tailText') && indexSrc.includes("tailText.includes('请作者喝杯茶')") && indexSrc.includes('if (head.length < 64) head += chunk.text'));
-chk('两张打赏图随包发布', fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'alipay.jpg')) && fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'wechat.jpg')));
+chk('打赏图随包发布：拼好的一张、单张裁图两张', fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'dashang-qr.png')) && fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'alipay-qr.jpg')) && fs.existsSync(path.join(PLUGIN, 'assets', 'dashang', 'wechat-qr.jpg')));
 chk('打赏通道代码随包发布', fs.existsSync(path.join(PLUGIN, 'lib', 'dashang.js')));
 chk('打赏通道接进宿主', indexSrc.includes('mountDashangRoute'));
 chk('六部脉合起来只算一项', prefix.includes('「脉象」就是这十项里的一项') && prefix.includes('不拆成六项去报数'));

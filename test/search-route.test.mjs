@@ -96,3 +96,28 @@ test('查询路由：只认本机连接，Host 头伪造、缺 Host、坏地址�
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('查询路由：内部错误只回通用文案，细节进日志不回显', async () => {
+  let route = null
+  const warns = []
+  const ctx = {
+    get: (key) => (key === 'webServer' ? { register: (r) => { route = r; return () => { route = null } } } : undefined),
+    logger: { info() {}, warn: (...args) => warns.push(args.join(' ')) },
+  }
+  const dispose = await mountSearchRoute(ctx, {
+    path: '/dsh-tcm-xueli/search',
+    rootDir: () => { throw new Error('内部秘密路径 D:\\私密\\资料库') },
+  })
+  const res = await new Promise((resolve) => {
+    const r = { code: 0, body: '', writeHead(code) { this.code = code }, end(body) { this.body = body || ''; resolve(this) } }
+    route.handler({ method: 'GET', url: '/dsh-tcm-xueli/search?q=' + encodeURIComponent('大黄'), headers: { host: '127.0.0.1:59174' }, socket: { remoteAddress: '127.0.0.1' } }, r)
+  })
+  assert.equal(res.code, 200)
+  const out = JSON.parse(res.body)
+  assert.equal(out.ok, false)
+  assert.ok(out.reason.includes('查询没跑通'), '只回通用文案')
+  assert.ok(!res.body.includes('秘密路径'), '内部细节不许回显给前端')
+  assert.ok(!res.body.includes('私密'), '内部路径不许回显给前端')
+  assert.ok(warns.some((w) => w.includes('秘密路径')), '细节要记进日志')
+  dispose()
+})

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { deflateRawSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { extractBookText } from '../lib/book-text.js'
+import { decodeBytes, extractBookText } from '../lib/book-text.js'
 
 function crc32() {
   return 0 // 读取端不校验 CRC，测试夹具用 0 即可。
@@ -139,3 +139,70 @@ test('extractBookText：正文超过 4MB 的 docx 不能变成空', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 });
+
+test('decodeBytes：GBK 按坏字比例探测，截断的 UTF-8 不整段判死', () => {
+  // 「太阳之为病，脉浮，头项强痛而恶寒。」的 GB18030 字节。
+  const gbk = Buffer.from([
+    0xCC, 0xAB, 0xD1, 0xF4, 0xD6, 0xAE, 0xCE, 0xAA, 0xB2, 0xA1, 0xA3, 0xAC,
+    0xC2, 0xF6, 0xB8, 0xA1, 0xA3, 0xAC, 0xCD, 0xB7, 0xCF, 0xEE, 0xC7, 0xBF,
+    0xCD, 0xB4, 0xB6, 0xF8, 0xB6, 0xF1, 0xBA, 0xAE, 0xA1, 0xA3,
+  ])
+  assert.equal(new TextDecoder('gb18030').decode(gbk), '太阳之为病，脉浮，头项强痛而恶寒。', '夹具字节先自校验')
+  assert.equal(decodeBytes(gbk), '太阳之为病，脉浮，头项强痛而恶寒。')
+  // UTF-8 截在字符中间：只坏结尾一个字（占比低于 2.5%），不许把整本判成 GB18030。
+  const utf8 = Buffer.from('太阳之为病，脉浮，头项强痛而恶寒。'.repeat(3), 'utf8')
+  const cut = utf8.subarray(0, utf8.length - 1)
+  assert.ok(decodeBytes(cut).startsWith('太阳之为病'), '截断取样仍是 UTF-8 口径')
+})
+
+test('extractBookText：GBK 编码的 txt 读得出中文', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qh-text-'))
+  try {
+    const file = join(dir, '伤寒论GBK.txt')
+    const gbk = Buffer.from([
+      0xCC, 0xAB, 0xD1, 0xF4, 0xD6, 0xAE, 0xCE, 0xAA, 0xB2, 0xA1, 0xA3, 0xAC,
+      0xC2, 0xF6, 0xB8, 0xA1, 0xA3, 0xAC, 0xCD, 0xB7, 0xCF, 0xEE, 0xC7, 0xBF,
+      0xCD, 0xB4, 0xB6, 0xF8, 0xB6, 0xF1, 0xBA, 0xAE, 0xA1, 0xA3,
+    ])
+    writeFileSync(file, gbk)
+    assert.match(extractBookText(file), /太阳之为病/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('extractBookText：超过 32MB 的 UTF-8 书截断取样不乱码', () => {
+  // 回归用例：原来按字节硬截后 fatal UTF-8 因结尾半个字整段判死，
+  // 回落 GB18030 把整本 UTF-8 书解成乱码，归类只能靠书名。
+  const dir = mkdtempSync(join(tmpdir(), 'qh-text-'))
+  try {
+    const file = join(dir, '超大伤寒论.txt')
+    const total = 32 * 1024 * 1024 + 10
+    const head = Buffer.from('太阳之为病，脉浮，头项强痛而恶寒。', 'utf8')
+    const fill = Buffer.from('太'.repeat(Math.ceil((total - head.length) / 3)), 'utf8')
+    writeFileSync(file, Buffer.concat([head, fill]).subarray(0, total))
+    const text = extractBookText(file)
+    assert.match(text, /太阳之为病/, '开头正文要读得出')
+    assert.ok(!text.includes('\uFFFD'), '取样窗口内不许带乱码')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('extractBookText：PDF 的 endstream 假标记不吞掉紧随的真 stream', () => {
+  // 回归用例：字典后面先出现一个 endstream 字样，旧守卫认不出，
+  // 把假标记当真 stream 去解压，失败后跳到最后一个 endstream，真正文被整个吞掉。
+  const dir = mkdtempSync(join(tmpdir(), 'qh-text-'))
+  try {
+    const file = join(dir, '假标记.pdf')
+    const content = '(ShangHanLun TaiYangBing MaiZheng BingZhi chapter one) Tj\n'.repeat(3)
+    writeFileSync(file, Buffer.concat([
+      Buffer.from('%PDF-1.4\n1 0 obj\n<< /FlateDecode /Length 999 >>\nendstream\nstream'),
+      deflateRawSync(content),
+      Buffer.from('endstream\n%%EOF\n'),
+    ]))
+    assert.match(extractBookText(file), /ShangHanLun/, '真 stream 里的正文要抽得出')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

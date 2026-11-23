@@ -2,8 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { autoFileBooks } from '../lib/auto-file.js'
+import path, { join } from 'node:path'
+import { autoFileBooks, moveFile } from '../lib/auto-file.js'
 
 const CATEGORIES = ['经典', '经典注解', '名著', '医案', '方药']
 
@@ -120,4 +120,56 @@ test('autoFileBooks：索引、说明与隐藏文件不移动', () => {
 test('autoFileBooks：根目录不存在时安全返回', () => {
   const result = autoFileBooks(join(tmpdir(), 'qh-not-exists-' + Date.now()), { minAgeMs: 0 })
   assert.deepEqual(result, { moved: 0, groups: 0, unclassified: 0 })
+})
+
+test('moveFile：跨盘复制独占写入，目标被占换名不覆盖', (t) => {
+  if (process.platform !== 'win32') return t.skip('跨盘用例仅 Windows')
+  if (path.parse(tmpdir()).root.toLowerCase() === path.parse(process.cwd()).root.toLowerCase()) {
+    return t.skip('临时目录与插件同盘，造不出 EXDEV')
+  }
+  const source = mkdtempSync(join(tmpdir(), 'qh-move-src-'))
+  const target = mkdtempSync(join(process.cwd(), 'qh-move-dst-'))
+  try {
+    // 无冲突：跨盘正常搬，源文件消失。
+    const srcA = join(source, '甲书.txt')
+    writeFileSync(srcA, '甲书内容', 'utf8')
+    assert.equal(moveFile(srcA, join(target, '甲书.txt')), true)
+    assert.equal(existsSync(srcA), false)
+    assert.equal(readFileSync(join(target, '甲书.txt'), 'utf8'), '甲书内容')
+    // 目标已被别人占上（TOCTOU）：换 -2 重试，绝不覆盖。
+    const srcB = join(source, '乙书.txt')
+    writeFileSync(srcB, '乙书新内容', 'utf8')
+    writeFileSync(join(target, '乙书.txt'), '别人先放的内容', 'utf8')
+    assert.equal(moveFile(srcB, join(target, '乙书.txt')), true)
+    assert.equal(existsSync(srcB), false)
+    assert.equal(readFileSync(join(target, '乙书.txt'), 'utf8'), '别人先放的内容')
+    assert.equal(readFileSync(join(target, '乙书-2.txt'), 'utf8'), '乙书新内容')
+  } finally {
+    rmSync(source, { recursive: true, force: true })
+    rmSync(target, { recursive: true, force: true })
+  }
+})
+
+test('moveFile：同盘也独占写入，目标被占换名不覆盖（不再用会静默覆盖的 rename）', () => {
+  const source = mkdtempSync(join(tmpdir(), 'qh-move-same-src-'))
+  const target = mkdtempSync(join(tmpdir(), 'qh-move-same-dst-'))
+  try {
+    // 无冲突：同盘正常搬，源文件消失。
+    const srcA = join(source, '甲书.txt')
+    writeFileSync(srcA, '甲书内容', 'utf8')
+    assert.equal(moveFile(srcA, join(target, '甲书.txt')), true)
+    assert.equal(existsSync(srcA), false)
+    assert.equal(readFileSync(join(target, '甲书.txt'), 'utf8'), '甲书内容')
+    // 目标已被别人占上（同盘 TOCTOU）：换 -2 重试，绝不覆盖别人的文件。
+    const srcB = join(source, '乙书.txt')
+    writeFileSync(srcB, '乙书新内容', 'utf8')
+    writeFileSync(join(target, '乙书.txt'), '别人先放的内容', 'utf8')
+    assert.equal(moveFile(srcB, join(target, '乙书.txt')), true)
+    assert.equal(existsSync(srcB), false)
+    assert.equal(readFileSync(join(target, '乙书.txt'), 'utf8'), '别人先放的内容')
+    assert.equal(readFileSync(join(target, '乙书-2.txt'), 'utf8'), '乙书新内容')
+  } finally {
+    rmSync(source, { recursive: true, force: true })
+    rmSync(target, { recursive: true, force: true })
+  }
 })

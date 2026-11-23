@@ -7,7 +7,13 @@ test('时令：夏天在夏至到小暑之间', () => {
   assert.equal(r.season, '夏')
   assert.equal(r.current, '夏至')
   assert.equal(r.next, '小暑')
-  assert.equal(r.days, 4)
+  assert.equal(r.days, 5)
+})
+
+test('时令：交节当天算第 1 天，不是第 0 天', () => {
+  const r = seasonOf(new Date(2026, 5, 21))
+  assert.equal(r.current, '夏至')
+  assert.equal(r.days, 1)
 })
 
 test('时令：十一月在立冬到小雪之间，并写明按节气近似', () => {
@@ -15,7 +21,7 @@ test('时令：十一月在立冬到小雪之间，并写明按节气近似', ()
   assert.equal(r.season, '冬')
   assert.equal(r.current, '立冬')
   assert.equal(r.next, '小雪')
-  assert.equal(r.days, 9)
+  assert.equal(r.days, 10)
   const text = seasonText(new Date(2026, 10, 16))
   assert.match(text, /2026 年 11 月 16 日/)
   assert.match(text, /冬季/)
@@ -27,7 +33,7 @@ test('时令：一月初还没交小寒，算去年的冬至之后', () => {
   assert.equal(r.season, '冬')
   assert.equal(r.current, '冬至')
   assert.equal(r.next, '小寒')
-  assert.equal(r.days, 12)
+  assert.equal(r.days, 13)
 })
 
 test('时令：天气不许编，必须走问答或写明按节气常理', () => {

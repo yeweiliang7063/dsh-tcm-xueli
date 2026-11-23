@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createGuard, fromThisMachine, ownPreset } from '../lib/guard.js'
+import { createGuard, fromLocalPage, fromThisMachine, ownPreset } from '../lib/guard.js'
 import { addPending } from '../lib/purge.js'
 import { mountSimEndRoute } from '../lib/sim-think.js'
 
@@ -35,6 +35,38 @@ test('本机判断：远程来源一律拒，Host 头伪造也救不回来', () 
   assert.equal(fromThisMachine(req('127.0.0.1', '')), false, '没有 Host 头也拒')
   assert.equal(fromThisMachine(null), false, '空请求不抛错，直接拒')
   assert.equal(fromThisMachine({}), false)
+})
+
+/* ── 入向：本机页面判断（会改东西的通道专用，防本机 CSRF） ── */
+
+const pageReq = (headers, remote = '127.0.0.1') => ({
+  socket: { remoteAddress: remote },
+  headers: { host: '127.0.0.1:59174', ...headers },
+})
+
+test('本机页面判断：外站 Origin／Referer 一律拒，哪怕连接就在本机', () => {
+  assert.equal(fromLocalPage(pageReq({ origin: 'https://evil.example.com' })), false, 'evil Origin 拒')
+  assert.equal(fromLocalPage(pageReq({ referer: 'https://evil.example.com/a.html' })), false, 'evil Referer 拒')
+  assert.equal(fromLocalPage(pageReq({ origin: 'null' })), false, '沙箱页的 null Origin 拒')
+  assert.equal(fromLocalPage(pageReq({ origin: 'file://' })), false, '本地文件页也拒')
+  assert.equal(fromLocalPage(pageReq({ origin: 'http://127.0.0.1.evil.com' })), false, '长得像回环的域名拒')
+  assert.equal(fromLocalPage(pageReq({ origin: 'http://192.168.1.9:59174' })), false, '局域网页面不算本机页面')
+  assert.equal(fromLocalPage(pageReq({ origin: 'https://evil.example.com', referer: 'http://127.0.0.1:59174/' })), false, 'Origin 优先：外站 Origin 不被好 Referer 救回')
+})
+
+test('本机页面判断：同源 GUI 的 Origin／Referer 过，双缺也过', () => {
+  assert.equal(fromLocalPage(pageReq({ origin: 'http://127.0.0.1:59174' })), true, 'GUI Origin 过')
+  assert.equal(fromLocalPage(pageReq({ origin: 'http://localhost:59174' })), true)
+  assert.equal(fromLocalPage(pageReq({ origin: 'http://[::1]:59174' })), true)
+  assert.equal(fromLocalPage(pageReq({ referer: 'http://127.0.0.1:59174/' })), true, 'GUI Referer 过')
+  assert.equal(fromLocalPage(pageReq({})), true, '双缺过')
+  assert.equal(fromLocalPage(pageReq({ origin: '', referer: '' })), true, '空头按缺处理')
+})
+
+test('本机页面判断：远程连接先被本机判断挡下，页面头再像也没用', () => {
+  assert.equal(fromLocalPage(pageReq({ origin: 'http://127.0.0.1:59174' }, '8.8.8.8')), false, '远程拒')
+  assert.equal(fromLocalPage(pageReq({}, '192.168.1.9')), false)
+  assert.equal(fromLocalPage(null), false, '空请求不抛错，直接拒')
 })
 
 /* ── 入向：面板局归属（删局、还档位、归档的闸） ── */

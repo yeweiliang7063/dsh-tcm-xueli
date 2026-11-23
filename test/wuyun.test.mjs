@@ -62,7 +62,7 @@ test('给模型的那段话把三项写全，并明确要求照抄', () => {
   for (const keyword of ['丙午年', '水运太过', '少阴君火', '阳明燥金', '照抄', '不许自己另推干支']) {
     assert.ok(text.includes(keyword), `五运六气说明缺「${keyword}」`)
   }
-  assert.ok(!/d{4}s*年/.test(text), '不许把公历年号混进运气口径')
+  assert.ok(!/\d{4}\s*年/.test(text), '不许把公历年号混进运气口径')
 })
 
 test('六气分步与节气对得上：初之气从大寒起', () => {

@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hasDosage, blotDosage, quoteSafeCut } from '../lib/dosage-guard.js'
+import { dashangBlock, hasGiftSign, missingDisclaimer } from '../lib/dashang.js'
 
 const XUEXI = join(import.meta.dirname, '..', 'lib', 'xuexi.js')
 const SIM = join(import.meta.dirname, '..', 'lib', 'sim.js')
@@ -52,10 +53,12 @@ function makeStream(src, overrides = {}) {
 
   const harness = `
     return (async function* (options, next, deps) {
-      const { hasDosage, blotDosage, quoteSafeCut, ctx, name, SCAN_WINDOW } = deps
+      const { hasDosage, blotDosage, quoteSafeCut, dashangBlock, hasGiftSign, missingDisclaimer, ctx, name, SCAN_WINDOW } = deps
       // 会话开场提醒要查资料库路径和会话类型：默认当「已经填了路径、就是中医会话」。
       const NOTICE_BLOCK = 0
       const kbNoticed = new Set()
+      // 打赏按会话只摆一次：要验重复的，从 deps 递同一个 Set 进来。
+      const giftOnce = deps.giftOnce || new Set()
       const kbNotice = deps.kbNotice || (() => '')
       const currentPath = deps.currentPath || (() => 'D:/中医知识库')
       const looksTcmSession = deps.looksTcmSession || (() => true)
@@ -71,6 +74,9 @@ function makeStream(src, overrides = {}) {
     hasDosage,
     blotDosage,
     quoteSafeCut,
+    dashangBlock,
+    hasGiftSign,
+    missingDisclaimer,
     ctx: { logger: { warn() {} }, on() {} },
     name: 'dsh-tcm-xueli',
     SCAN_WINDOW: 600,
@@ -80,6 +86,7 @@ function makeStream(src, overrides = {}) {
     looksTcmPrompt: overrides.looksTcmPrompt,
     versionOf: overrides.versionOf,
     hint: overrides.hint,
+    giftOnce: overrides.giftOnce,
   }
   return (chunks) => {
     async function* source() {
@@ -97,6 +104,7 @@ function makeSimStream(overrides = {}) {
       const { ctx, dashangGiftText } = deps
       const hint = deps
       const muted = { of: deps.simQuiet || (() => false) }
+      const clinic = { of: deps.isPanelRound || null }
       const gifted = { due: deps.due || null }
       const clinicGiftOf = deps.clinicGiftOf || null
       ${body}
@@ -107,6 +115,7 @@ function makeSimStream(overrides = {}) {
     ctx: { logger: { warn() {} }, on() {} },
     dashangGiftText: overrides.dashangGiftText || (() => ''),
     simQuiet: overrides.simQuiet,
+    isPanelRound: overrides.isPanelRound,
     due: overrides.due,
     clinicGiftOf: overrides.clinicGiftOf,
   }
@@ -178,8 +187,10 @@ test('流块类型：普通长回答，每块合法、正文完整', async () =>
   assertAllBlocksLegal(out, '普通回答')
   assertBlocksOpened(out, '普通回答')
 
+  const bodyText = out.filter((c) => c.type === 'text-delta' && c.index === 0).map((c) => c.text).join('')
+  assert.equal(bodyText, '这是第一句。这是第二句，还没写完。', '正文一个字都不许少、不许串')
   const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
-  assert.equal(joined, '这是第一句。这是第二句，还没写完。')
+  assert.ok(joined.includes('本节仅供学习研究'), '收尾块要补上免责声明')
   assert.ok(out.some((c) => c.type === 'finish'), 'finish 块被吞了')
 })
 
@@ -330,8 +341,10 @@ test('会话开场提醒：填了资料库就不提醒，正文仍在 0 号块',
   assertBlocksOpened(out, '不提醒')
 
   const texts = out.filter((c) => c.type === 'text-delta')
-  assert.ok(texts.every((c) => c.index === 0), '不该挪块：' + JSON.stringify(texts))
-  assert.equal(texts.map((c) => c.text).join(''), '第一句。')
+  const body = texts.filter((c) => c.index === 0)
+  assert.equal(body.map((c) => c.text).join(''), '第一句。', '正文仍在 0 号块，不该挪块')
+  const tail = texts.filter((c) => c.index === 1)
+  assert.ok(tail.length > 0 && tail.map((c) => c.text).join('').includes('本节仅供学习研究'), '收尾块自己一块')
 })
 
 test('问诊闭麦的那一轮：就算没填资料库，提醒也不许漏出来', async () => {
@@ -360,10 +373,9 @@ test('不是中医会话：原样转发，一个字节都不动', async () => {
   assert.equal(out[1].text, '桂枝三两。', '非中医会话不许挖句')
   assert.ok(!JSON.stringify(out).includes('⚠️'), '非中医会话不许插提醒')
 })
-test('点评别人的方：没加引号照遮，整段抄进「」才放过', async () => {
-  // 原单是用户发来的（messages 里的 user 消息），上面印着 30g／15g／10g。
-  // 口径：转述别人原方也必须有引号；整段放进「」才算照念原文、出口放过，
-  // 没加引号的一律按自己复述处理，剂量照遮；模型自己新加的「陈皮 6g」永远照遮。
+test('点评别人的方：带现代克数的引文也验真照遮，不含克数的原文才放过', async () => {
+  // 新口径（引文验真）：经典原文用两、钱、枚，不用现代克数。引号里一旦出现「数字＋克/g」，
+  // 就认定不是古籍原文（多是转述的原单或自拟方），豁免取消、照遮；模型自己新加的量永远照遮。
   const messages = [
     { role: 'system', content: '你是中医助手。' },
     { role: 'user', content: '这是我拿到的方：黄芪30g、当归15g、白术10g，请点评。' },
@@ -384,11 +396,11 @@ test('点评别人的方：没加引号照遮，整段抄进「」才放过', as
   assertAllBlocksLegal(quoted, '点评原单')
   assertBlocksOpened(quoted, '点评原单')
   const q = joinedOf(quoted)
-  assert.ok(q.includes('黄芪 30g'), '引号里的原单被遮了：' + q)
-  assert.ok(q.includes('当归 15g'), '引号里的原单被遮了：' + q)
-  assert.ok(q.includes('白术 10g'), '引号里的原单被遮了：' + q)
+  assert.ok(q.includes('黄芪 *'), '引号里带现代克数的原单也要验真照遮：' + q)
+  assert.ok(q.includes('当归 *'), '引号里带现代克数的原单也要验真照遮：' + q)
+  assert.ok(q.includes('白术 *'), '引号里带现代克数的原单也要验真照遮：' + q)
   assert.ok(q.includes('陈皮 *'), '模型自己新给的量没遮：' + q)
-  assert.ok(!q.includes('6g'), '模型自己新给的量没遮干净：' + q)
+  assert.ok(!q.includes('30g') && !q.includes('15g') && !q.includes('10g') && !q.includes('6g'), '带克数的引文与自拟量都要遮干净：' + q)
 
   const bare = await collect(
     run([START, TEXT('原单上黄芪 30g、当归 15g，剂量偏小。'), ...END]),
@@ -435,24 +447,89 @@ test('会话认不出来、提示词也不是学理模式：一个字节都不�
   assert.equal(joined, '生姜 25g，先煎十分钟。')
 })
 
-test('流块类型：引文被句号、换行切开，跨块也不许误遮', async () => {
-  // 引一整句原文时，句号往往先到；旧逻辑立刻在句号处切段，这一块只剩半个引文，
-  // 被判成「没加引号」，引文里的克数就被误遮了。切点现在会前移到开引号处等闭合。
+test('流块类型：不含现代克数的引文被句号、换行切开，跨块也不许误遮', async () => {
+  // 引一整句原文（经典用「两」，不含现代克数，验真后仍豁免）时，句号往往先到；
+  // 旧逻辑立刻在句号处切段，这一块只剩半个引文，被判成「没加引号」而误遮。
+  // 切点现在会前移到开引号处等闭合，整段引文照原样放过。
   const run = makeStream(readFileSync(XUEXI, 'utf8'))([
     START,
-    TEXT('（原文：「桂枝9克，芍药6克。'),
+    TEXT('（原文：「桂枝三两，芍药六两。'),
     TEXT('共七剂。」）\n'),
-    TEXT('原文：「甘草6克\n'),
-    TEXT('生姜9克」\n'),
+    TEXT('原文：「甘草六两\n'),
+    TEXT('生姜九两」\n'),
     ...END,
   ])
   const out = await collect(run)
   assertAllBlocksLegal(out, '引文跨块')
   assertBlocksOpened(out, '引文跨块')
   const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
-  assert.ok(joined.includes('桂枝9克'), '引文里的剂量被误遮：' + joined)
-  assert.ok(joined.includes('甘草6克'), '引文里的剂量被误遮：' + joined)
-  assert.ok(!joined.includes('桂枝*'), '引文里的剂量被误遮：' + joined)
+  assert.ok(joined.includes('桂枝三两'), '不含克数的引文被误遮：' + joined)
+  assert.ok(joined.includes('甘草六两'), '不含克数的引文被误遮：' + joined)
+  assert.ok(!joined.includes('桂枝*'), '不含克数的引文被误遮：' + joined)
+})
+
+test('收块全文（block-end）也要遮：宿主拿它当权威整体替换，不遮等于没遮', async () => {
+  // S1 回归：宿主按 block-end 里的全文整体替换显示、落盘、回放（First close wins）。
+  // 只遮 text-delta 增量没用——收束后全文一回显，克数又出来了。收块前必须把全文也遮一遍。
+  const full = '桂枝9克，白芍6克。'
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
+    START,
+    TEXT('桂枝9克，'),
+    TEXT('白芍6克。'),
+    { type: 'block-end', index: 0, block: { type: 'text', text: full } },
+    { type: 'usage', tokens: 10 },
+    { type: 'finish', reason: 'stop' },
+  ])
+  const out = await collect(run)
+  assertAllBlocksLegal(out, '收块全文')
+  const end = out.find((c) => c.type === 'block-end' && c.index === 0 && c.block)
+  assert.ok(end, '要有带全文的收块')
+  assert.equal(end.block.text, '桂枝*，白芍*。', '收块全文没遮：' + end.block.text)
+  const joined = out.filter((c) => c.type === 'text-delta' && c.index === 0).map((c) => c.text).join('')
+  assert.ok(!joined.includes('9克') && !joined.includes('6克'), '增量也要遮：' + joined)
+})
+
+test('推理通道（reasoning）也遮：思考过程里的克数同样不许漏', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
+    START,
+    { type: 'block-start', index: 1, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 1, text: '思考：桂枝9克先煎。' },
+    { type: 'block-end', index: 1, block: { type: 'reasoning', text: '思考：桂枝9克先煎。' } },
+    TEXT('正常正文一句。'),
+    { type: 'block-end', index: 0, block: { type: 'text', text: '正常正文一句。' } },
+    { type: 'usage', tokens: 10 },
+    { type: 'finish', reason: 'stop' },
+  ])
+  const out = await collect(run)
+  const rd = out.filter((c) => c.type === 'reasoning-delta').map((c) => c.text).join('')
+  assert.ok(!rd.includes('9克'), '推理增量没遮：' + rd)
+  assert.ok(rd.includes('桂枝*'), '推理增量应留标记：' + rd)
+  const re = out.find((c) => c.type === 'block-end' && c.block && c.block.type === 'reasoning')
+  assert.ok(re && !re.block.text.includes('9克'), '推理收块全文没遮：' + JSON.stringify(re))
+})
+
+test('全角数字跨块也不漏：「桂枝９」＋「克」两块拼起来照遮', async () => {
+  // 句尾悬空数字压住等下一块单位：半角全角都要认，否则「９」先发、「克」后到就漏遮。
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
+    START,
+    TEXT('桂枝９\n'),
+    TEXT('克，水煎服。'),
+    ...END,
+  ])
+  const out = await collect(run)
+  const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  assert.ok(!joined.includes('９克') && !joined.includes('9克'), '全角剂量切块后漏了：' + joined)
+  assert.ok(joined.includes('*'), '应留遮罩标记：' + joined)
+})
+
+test('高频漏网补上：9克口服、9克分服、9克日二次都遮', async () => {
+  for (const s of ['桂枝9克口服。', '桂枝9克分服。', '桂枝9克日二次。']) {
+    const run = makeStream(readFileSync(XUEXI, 'utf8'))([START, TEXT(s), ...END])
+    const out = await collect(run)
+    const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+    assert.ok(!joined.includes('9克'), '没遮：' + joined)
+    assert.ok(joined.includes('*'), '应留标记：' + joined)
+  }
 })
 
 test('被系统通知叫醒的一轮：文字清空，工具块照旧转发', async () => {
@@ -474,4 +551,193 @@ test('被系统通知叫醒的一轮：文字清空，工具块照旧转发', as
   const call = out.find((c) => c.type === 'tool-call')
   assert.ok(call, '工具块不许丢：丢了宿主会报 unknown tool')
   assert.equal(call.name, 'send_message')
+})
+
+/* ── 打赏区：学习版这条线（回答末尾真出了那两句声明才补，一局只摆一次） ── */
+
+const SIGN_LEARN = '【中医 · 经方（学习版）】本节仅供学习研究，不构成诊疗建议；如需用药或施针请由执业中医师面诊。'
+const SIGN_HALLU = '⚠️ AI 有幻觉：以上内容由人工智能生成，可能编造原文、记错条文或张冠李戴，请自行核对原书后再用。'
+
+test('打赏区：回答末尾带那句声明，就补一块', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
+    START,
+    TEXT('**结论**：太阳表虚，营卫不和。'),
+    TEXT('桂枝汤证，按方调。'),
+    TEXT(SIGN_LEARN),
+    TEXT(SIGN_HALLU),
+    ...END,
+  ])
+  const out = await collect(run)
+  assertAllBlocksLegal(out, '学习版打赏')
+  assertBlocksOpened(out, '学习版打赏')
+  const gift = out.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png'))
+  assert.equal(gift.length, 1, '出了声明就补，而且只补一块')
+  assert.ok(gift[0].text.includes('请作者喝杯茶'), '标题照旧')
+  assert.ok(gift[0].text.includes('打赏全凭自愿'), '自愿说明照旧')
+  const finish = out.find((c) => c.type === 'finish')
+  assert.equal(out[out.indexOf(finish) - 1].type, 'block-end', '打赏块要在结尾之前收好')
+})
+
+test('打赏区：只有一句声明也补', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-half-sign' } })([
+    START,
+    TEXT('## 一、结论'),
+    TEXT('桂枝汤证与麻黄汤证的分水岭在有汗无汗。'),
+    TEXT('只有一句声明也得出打赏：'),
+    TEXT(SIGN_LEARN),
+    ...END,
+  ])
+  const out = await collect(run)
+  const gift = out.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png'))
+  assert.equal(gift.length, 1, '两句里出任意一句都要补')
+})
+
+test('免责声明：模型漏写就由代码补上，补完照摆打赏', async () => {
+  // 声明是硬性的，不许因为它缺席就不补；补上之后就算「给了说法」，打赏一块照摆。
+  for (const first of ['## 一、结论', '## 手上的线索', '病人问：我这头疼几天了，要紧吗？']) {
+    const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-lack-' + first.length } })([
+      START,
+      TEXT(first),
+      TEXT('。'),
+      ...END,
+    ])
+    const out = await collect(run)
+    const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+    assert.ok(joined.includes('本节仅供学习研究'), '第一行声明要补上：' + first.slice(0, 6))
+    assert.ok(joined.includes('AI 有幻觉'), '第二行声明也要补上：' + first.slice(0, 6))
+    const gift = out.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png'))
+    assert.equal(gift.length, 1, '声明补上之后打赏照摆一块：' + first.slice(0, 6))
+  }
+})
+
+test('免责声明：模型已经写了的，不再重复贴一遍', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-no-dup' } })([
+    START,
+    TEXT('**结论**：太阳表虚。'),
+    TEXT(SIGN_LEARN),
+    TEXT(SIGN_HALLU),
+    ...END,
+  ])
+  const out = await collect(run)
+  const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  assert.equal(joined.split('本节仅供学习研究').length - 1, 1, '第一行只许出现一次')
+  assert.equal(joined.split('AI 有幻觉').length - 1, 1, '第二行只许出现一次')
+})
+
+test('免责声明：补上去的两行排在打赏前面', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-order' } })([
+    START,
+    TEXT('**结论**：太阳表虚。'),
+    ...END,
+  ])
+  const out = await collect(run)
+  const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  const atSign = joined.indexOf('本节仅供学习研究')
+  const atHallu = joined.indexOf('AI 有幻觉')
+  const atGift = joined.indexOf('dashang-qr.png')
+  assert.ok(atSign > 0 && atHallu > atSign, '两行声明要按原顺序补')
+  assert.ok(atGift > atHallu, '打赏要排在声明之后')
+})
+
+test('免责声明：只调工具、没写正文的那一轮不补', async () => {
+  // 一轮里先调 grep 再写答案的情况很常见；提前补声明就会一局贴好几遍。
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-tool-only' } })([
+    START,
+    { type: 'tool-call', index: 1, name: 'grep', input: { pattern: '柴胡' } },
+    { type: 'finish', reason: 'tool-calls' },
+  ])
+  const out = await collect(run)
+  const texts = out.filter((c) => c.type === 'tool-call')
+  assert.equal(texts.length, 1, '工具块照旧转发')
+  const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  assert.equal(joined, '', '没写正文就不许贴声明：' + joined)
+})
+
+test('免责声明：写了字又调工具的那一轮也不收尾，等真正写完那轮', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { options: { system: '学理模式', sessionId: 'session-tool-after-text' } })([
+    START,
+    TEXT('我先查一下原文。'),
+    { type: 'tool-call', index: 1, name: 'grep', input: { pattern: '柴胡' } },
+    { type: 'finish', reason: 'tool-calls' },
+  ])
+  const out = await collect(run)
+  const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  assert.equal(joined, '我先查一下原文。', '话没说完就不收尾：' + joined)
+})
+
+test('免责声明：闭麦那一轮一个字都不许往外放', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { hint: { muted: true } })([
+    START,
+    TEXT('**结论**：太阳表虚。'),
+    ...END,
+  ])
+  const out = await collect(run)
+  const joined = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  assert.equal(joined, '**结论**：太阳表虚。', '闭麦轮不许补声明、不许摆打赏')
+})
+
+test('打赏区：回答里已经有打赏码的，不再补第二块', async () => {
+  const abs = 'D:/x/assets/dashang/dashang-qr.png'
+  const inner = '--- **这一节要是帮到你，可以请作者喝杯茶：** ![打赏码](' + abs + ') 打赏全凭自愿。'
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
+    START,
+    { type: 'text-delta', index: 0, text: '正文。' },
+    { type: 'text-delta', index: 0, text: inner },
+    { type: 'text-delta', index: 0, text: SIGN_LEARN },
+    ...END,
+  ])
+  const out = await collect(run)
+  const gift = out.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png'))
+  assert.equal(gift.length, 1, '同一份回答只许一块打赏区')
+})
+
+test('打赏区：同一个会话只摆一次，第二回再出声明也不摆', async () => {
+  const shared = new Set()
+  const opts = { options: { system: '学理模式', sessionId: 'session-gift-once' } }
+  const first = await collect(makeStream(readFileSync(XUEXI, 'utf8'), { ...opts, giftOnce: shared })([
+    START,
+    TEXT('**结论**：太阳表虚，营卫不和。'),
+    TEXT(SIGN_LEARN),
+    ...END,
+  ]))
+  assert.equal(first.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png')).length, 1, '第一回要摆')
+  const second = await collect(makeStream(readFileSync(XUEXI, 'utf8'), { ...opts, giftOnce: shared })([
+    START,
+    TEXT('**结论**：再说一遍，还是表虚。'),
+    TEXT(SIGN_LEARN),
+    ...END,
+  ]))
+  assert.equal(second.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png')).length, 0, '同一会话第二回不再摆')
+})
+
+test('打赏区：摆在两行声明之后，不在声明前面', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'))([
+    START,
+    TEXT('**结论**：太阳表虚，营卫不和。'),
+    TEXT('## 手上的线索'),
+    TEXT('够定的是：主症、病程。'),
+    TEXT(SIGN_LEARN),
+    TEXT(SIGN_HALLU),
+    ...END,
+  ])
+  const out = await collect(run)
+  const text = out.filter((c) => c.type === 'text-delta').map((c) => c.text).join('')
+  const atSign = text.indexOf(SIGN_LEARN)
+  const atHallu = text.indexOf(SIGN_HALLU)
+  const atGift = text.indexOf('dashang-qr.png')
+  assert.ok(atSign > 0 && atHallu > atSign, '声明两行要照旧写在回答里')
+  assert.ok(atGift > atHallu, '打赏区要排在声明之后')
+  assert.ok(text.indexOf('打赏全凭自愿') > atGift, '自愿说明在码后面')
+})
+
+test('打赏区：模拟问诊面板开的局，学习版这层不再补第二块', async () => {
+  const run = makeStream(readFileSync(XUEXI, 'utf8'), { hint: { clinic: true } })([
+    START,
+    TEXT('**结论**：太阳表虚。'),
+    TEXT(SIGN_LEARN),
+    ...END,
+  ])
+  const out = await collect(run)
+  const gift = out.filter((c) => c.type === 'text-delta' && c.text.includes('dashang-qr.png'))
+  assert.equal(gift.length, 0, '面板局打赏归模拟问诊按十局算，这层不许补')
 })

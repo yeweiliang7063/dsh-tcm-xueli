@@ -4,7 +4,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { INDEX_FILE, buildIndexMarkdown, writeIndex, scriptTag } from '../lib/kb-index.js'
+import { INDEX_FILE, MARKER, buildIndexMarkdown, writeIndex, scriptTag } from '../lib/kb-index.js'
+import { classifyBook } from '../lib/book-classify.js'
 
 function makeTree() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-index-'))
@@ -20,7 +21,7 @@ function makeTree() {
   put('skills/tcm-jingfang/SKILL.md', '检索规程')
   put('node_modules/pkg/readme.txt', '不该进索引')
   put('.hidden/secret.txt', '不该进索引')
-  put(INDEX_FILE, '旧索引')
+  put(INDEX_FILE, MARKER + '\n旧索引')
   return root
 }
 
@@ -44,6 +45,8 @@ function makeCategoryTree() {
   put('米晶子——济世良方.txt', '验方。')
   put('名著/金匮要略.txt', '放进同名文件夹应归名著。')
   put('方药/某书.txt', '放进同名文件夹应归方药。')
+  // 只含「伤寒」不含全名：旧索引宽匹配会归经典，归类器认不出归其他。
+  put('伤寒来苏集.txt', '来苏集。')
   return root
 }
 
@@ -115,6 +118,31 @@ test('buildIndexMarkdown：按五类编排，同名文件夹优先', () => {
   assert.ok(rels('方药').includes('伤寒论类方.txt'))
   assert.ok(rels('方药').includes('神农本草经.txt'))
   assert.ok(rels('方药').includes('方药/某书.txt'))
+})
+
+test('buildIndexMarkdown：索引类别与 book-classify 口径一致，不再宽匹配', () => {
+  const built = buildIndexMarkdown(makeCategoryTree())
+  const rels = (title) => (built.groups[title] || []).map((f) => f.rel)
+  // 「伤寒来苏集」不含经典全名：索引与物理归类都认不出，归其他，两边一致。
+  assert.ok(rels('其他').includes('伤寒来苏集.txt'))
+  assert.equal(classifyBook({ name: '伤寒来苏集.txt' }).category, '其他')
+  assert.ok(!rels('经典').includes('伤寒来苏集.txt'))
+})
+
+test('writeIndex：用户手写的同名笔记不被覆盖，如实返回 user-file', () => {
+  const root = makeTree()
+  const file = path.join(root, INDEX_FILE)
+  fs.writeFileSync(file, '我自己手写的索引笔记', 'utf8')
+  const warns = []
+  const result = writeIndex(root, new Date('2026-01-02T03:04:00'), { warn: (...args) => warns.push(args) })
+  assert.equal(result.changed, false)
+  assert.equal(result.reason, 'user-file')
+  assert.equal(fs.readFileSync(file, 'utf8'), '我自己手写的索引笔记')
+  assert.ok(warns.length >= 1, '跳过覆盖要记日志')
+  // 没有日志通道也绝不覆盖。
+  const again = writeIndex(root)
+  assert.equal(again.reason, 'user-file')
+  assert.equal(fs.readFileSync(file, 'utf8'), '我自己手写的索引笔记')
 })
 
 test('writeIndex：写盘后再跑一次不重写文件', () => {

@@ -43,3 +43,31 @@ test('ensureCategoryDirs：资料库不存在时返回 0，不擅自建根目录
   assert.equal(ensureCategoryDirs(kb), 0)
   assert.equal(fs.existsSync(kb), false)
 })
+
+test('ensureCorpus：单本复制失败要记日志，不静默吞', () => {
+  const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'tcm-corpus-fail-'))
+  // 用一个目录占住书名：rename 到目录必然失败，模拟写入失败。
+  fs.mkdirSync(path.join(kb, 'text', '03-伤寒论.md'), { recursive: true })
+  const warns = []
+  const copied = ensureCorpus(kb, { warn: (...args) => warns.push(args) })
+  assert.ok(copied >= 9, `其它书照常补，实际 ${copied}`)
+  assert.ok(warns.length >= 1, '失败必须记日志')
+  assert.ok(fs.statSync(path.join(kb, 'text', '03-伤寒论.md')).isDirectory(), '失败不碰用户既有路径')
+})
+
+test('ensureCorpus：text 目录建失败时记日志并返回 0', () => {
+  const kb = path.join(os.tmpdir(), `tcm-corpus-file-${Date.now()}`)
+  fs.writeFileSync(kb, '占位', 'utf8')
+  const warns = []
+  assert.equal(ensureCorpus(kb, { warn: (...args) => warns.push(args) }), 0)
+  assert.ok(warns.length >= 1, 'mkdir 失败必须记日志')
+})
+
+test('ensureCategoryDirs：建失败无日志通道时返回 -1，有日志时逐条 warn', () => {
+  const kb = path.join(os.tmpdir(), `tcm-category-file-${Date.now()}`)
+  fs.writeFileSync(kb, '占位', 'utf8')
+  assert.equal(ensureCategoryDirs(kb), -1, '没有日志通道要如实返回失败')
+  const warns = []
+  assert.equal(ensureCategoryDirs(kb, { warn: (...args) => warns.push(args) }), 0)
+  assert.equal(warns.length, 5, '五个文件夹各记一条')
+})

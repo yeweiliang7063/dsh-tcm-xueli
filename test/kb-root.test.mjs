@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { childOf, insideRoot, normalizeRoot } from '../lib/kb-root.js'
 
@@ -34,4 +36,29 @@ test('库根锁定：同一路径的斜杠写法归一后相等', () => {
   const a = path.join('D:', '中医工作区', '库')
   const b = 'D:/中医工作区/库/'
   assert.equal(normalizeRoot(a), normalizeRoot(b))
+})
+
+test('库根锁定：库内 junction 指向外面时，词法在根内也判根外', (t) => {
+  if (process.platform !== 'win32') return t.skip('junction 仅 Windows')
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-root-junction-'))
+  const root = path.join(base, '库')
+  const outside = path.join(base, '外面')
+  fs.mkdirSync(root)
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(outside, '已有.md'), 'x', 'utf8')
+  try {
+    fs.symlinkSync(outside, path.join(root, '链接'), 'junction')
+  } catch {
+    fs.rmSync(base, { recursive: true, force: true })
+    return t.skip('当前环境建不了 junction')
+  }
+  // 已存在的文件：realpath 直接解析出根外。
+  assert.equal(insideRoot(root, path.join(root, '链接', '已有.md')), false)
+  // 尚不存在的新文件：沿祖先解析出 junction 的真实指向，同样拦住。
+  assert.equal(insideRoot(root, path.join(root, '链接', '新文件.md')), false)
+  assert.equal(childOf(root, '链接', '新文件.md'), '')
+  // 正常子目录不受影响。
+  fs.mkdirSync(path.join(root, 'text'))
+  assert.equal(insideRoot(root, path.join(root, 'text', '书.txt')), true)
+  fs.rmSync(base, { recursive: true, force: true })
 })
