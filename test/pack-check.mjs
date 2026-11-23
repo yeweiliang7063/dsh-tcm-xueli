@@ -19,6 +19,7 @@ const need = [
   'lib/clinic.js',
   'lib/records.js',
   'lib/teach.js',
+  'lib/yian.js',
   'lib/dashang.js',
   'lib/client.js',
   'lib/search.js',

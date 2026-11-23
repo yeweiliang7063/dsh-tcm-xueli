@@ -234,6 +234,40 @@ test('createSessionRecorder：按当前预设归档整段会话，标题来自�
   assert.ok(files.includes('切换预设后的会话.md'))
 })
 
+test('createSessionRecorder：模拟问诊局（标题「问诊·局」开头）不归档，改名前的兜底归档也清掉', () => {
+  const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-sim-skip-'))
+  const recorder = createSessionRecorder({
+    getKb: () => kb,
+    currentPreset: (session) => session.projectionPreset,
+    getTitle: (session) => session.title,
+    logger: { info: () => {}, warn: () => {} },
+  })
+  const simSession = {
+    id: 'session-simround1',
+    header: { agentPreset: 'dsh-tcm-xueli' },
+    title: '问诊·局一',
+    snapshotEvents: () => [userEvent('头疼。'), assistantEvent('请补脉证。')],
+  }
+  recorder(simSession, assistantEvent('请补脉证。', 3))
+  assert.equal(fs.existsSync(path.join(kb, RECORD_DIR)), false, '问诊局不该建医案目录')
+
+  // 标题还没生成时先写过一份兜底名归档，随后认出是问诊局：那份兜底归档要被清掉。
+  const lateTitle = {
+    id: 'session-simround2',
+    header: { agentPreset: 'dsh-tcm-xueli' },
+    title: undefined,
+    snapshotEvents: () => [userEvent('咳嗽。'), assistantEvent('请补脉证。')],
+  }
+  recorder(lateTitle, assistantEvent('请补脉证。', 3))
+  const files = fs.readdirSync(path.join(kb, RECORD_DIR))
+  assert.equal(files.length, 1, '标题没生成时先写一份兜底名归档')
+  const fallback = path.join(kb, RECORD_DIR, files[0])
+  lateTitle.title = '问诊·局二'
+  recorder(lateTitle, { type: 'session/title', seq: 4, time: at.getTime() + 4000, data: { title: '问诊·局二' } })
+  assert.equal(fs.existsSync(fallback), false, '认出问诊局后兜底归档应删除')
+  assert.deepEqual(fs.readdirSync(path.join(kb, RECORD_DIR)), [], '医案里不留问诊记录')
+})
+
 test('思考档位存根：记下、读回、清掉；库没设或文件坏了都不炸', () => {
   const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-gear-'))
   assert.deepEqual(readGearState(''), {}, '库没设回空')
