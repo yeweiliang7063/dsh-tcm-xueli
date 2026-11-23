@@ -316,6 +316,21 @@ test('最近几局：并发写入走串行队列不丢行；写失败返回 fals
   assert.ok(warns.length >= 1, '写失败要记日志，不能静默')
 })
 
+test('最近几局：崩溃残留的跨进程写入锁会被破掉，归档不卡死，用完释放锁', async () => {
+  const kb = fs.mkdtempSync(path.join(os.tmpdir(), 'qh-rounds-lock-'))
+  const dir = path.join(kb, RECORD_DIR)
+  fs.mkdirSync(dir, { recursive: true })
+  const lock = path.join(dir, ROUNDS_FILE + '.lock')
+  fs.mkdirSync(lock)
+  const stale = new Date(Date.now() - 60000)
+  fs.utimesSync(lock, stale, stale) // 模拟上个进程崩溃留下的旧锁
+  const ok = await saveRecentRound(kb, { id: 'r-lock', createdAt: 1, caseSummary: '题面' })
+  assert.equal(ok, true, '残留锁不该把归档永久卡死')
+  assert.equal(fs.existsSync(lock), false, '临界区跑完要把锁释放掉')
+  assert.equal(readRecentRounds(kb).length, 1, '破锁后数据照常写进去')
+  fs.rmSync(kb, { recursive: true, force: true })
+})
+
 /* ── 锚点历史：挪进插件私有目录，旧库文件读走合并后删除 ── */
 
 test('锚点历史：存 DSH 家目录的私有目录，旧库文件合并后删掉', () => {

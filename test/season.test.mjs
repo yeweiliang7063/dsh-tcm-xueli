@@ -71,16 +71,23 @@ test('六气：11 月 16 日还在五之气，终之气要等小雪之后', () =
   assert.equal(qiOf(new Date(2026, 10, 23)).name, '终之气')
 })
 
-test('六气：跨年的一月仍算终之气，且天数从去年小雪起算', () => {
+test('六气：跨年的一月仍算终之气，且天数从去年小雪起算（交节当天算第 1 天）', () => {
   const q = qiOf(new Date(2027, 0, 5))
   assert.equal(q.name, '终之气')
-  assert.equal(q.days, 44)
+  assert.equal(q.days, 45)
 })
 
-test('六气：初之气从大寒起算', () => {
+test('六气：初之气从大寒起算（交节当天算第 1 天）', () => {
   const q = qiOf(new Date(2026, 1, 1))
   assert.equal(q.name, '初之气')
-  assert.equal(q.days, 12)
+  assert.equal(q.days, 13)
+})
+
+test('六气与节气口径一致：交节当天 qiOf 与 seasonOf 都算第 1 天', () => {
+  const day = new Date(2026, 0, 20) // 大寒
+  assert.equal(qiOf(day).name, '初之气')
+  assert.equal(qiOf(day).days, 1)
+  assert.equal(seasonOf(day).days, 1)
 })
 
 test('时令文案要写明现在走第几气，并禁止把下一气提前引', () => {

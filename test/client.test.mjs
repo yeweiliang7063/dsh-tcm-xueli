@@ -356,6 +356,30 @@ test('纯函数行为：id 校验、隐藏集合增删、豁免标记只消费�
   assert.equal(h.takeSkipFlag({ current: 'yes' }), false)
 })
 
+test('豁免集合持久化：去会话页的局落 localStorage，重启载入仍可见', () => {
+  const store = new Map()
+  const fakeLocalStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)) },
+  }
+  const prev = globalThis.localStorage
+  globalThis.localStorage = fakeLocalStorage
+  try {
+    const a = loadClient()
+    const e1 = a.definition.factory((name) => (name === 'react' ? a.fakeReact : {}))
+    e1.__test.simHideRelease(e1.__test.simRoundIds, e1.__test.simShownIds, 'round-keep')
+    assert.ok(store.has('dsh-tcm-xueli:simShown'), '豁免要落 localStorage')
+    assert.ok(store.get('dsh-tcm-xueli:simShown').includes('round-keep'), '清单里要有这一局')
+    // 模拟刷新/重启：全新 factory 实例从 localStorage 载入豁免集合。
+    const b = loadClient()
+    const e2 = b.definition.factory((name) => (name === 'react' ? b.fakeReact : {}))
+    assert.equal(e2.__test.simHideExempt(e2.__test.simShownIds, 'round-keep'), true, '重启后豁免局仍可见，不会又被藏回去')
+  } finally {
+    if (prev === undefined) delete globalThis.localStorage
+    else globalThis.localStorage = prev
+  }
+})
+
 test('隐藏样式行为：非法 id 不进 CSS、豁免局不藏、卸载清干净', () => {
   const doc = fakeDoc()
   const { definition, fakeReact } = loadClient(doc)
